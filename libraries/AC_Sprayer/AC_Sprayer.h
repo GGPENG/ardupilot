@@ -16,16 +16,14 @@
         8. set the SPRAY_PUMP_MIN to the minimum value that the pump servo should move to while engaged expressed as a percentage (i.e. 0 ~ 100) of the full servo range
         9. set the SPRAY_SPEED_MIN to the minimum speed (in cm/s) the vehicle should be moving at before the pump and sprayer are turned on.  0 will mean the pump and spinner will always be on when the system is enabled with ch7/ch8 switch
 **/
-
-#ifndef AC_SPRAYER_H
-#define AC_SPRAYER_H
+#pragma once
 
 #include <inttypes.h>
-#include <AP_Common.h>
-#include <AP_Param.h>
-#include <AP_Math.h>
-#include <RC_Channel.h>
-#include <AP_InertialNav.h>     // Inertial Navigation library
+#include <AP_Common/AP_Common.h>
+#include <AP_Param/AP_Param.h>
+#include <AP_Math/AP_Math.h>
+#include <RC_Channel/RC_Channel.h>
+#include <AP_InertialNav/AP_InertialNav.h>     // Inertial Navigation library
 
 #define AC_SPRAYER_DEFAULT_PUMP_RATE        10.0f   // default quantity of spray per meter travelled
 #define AC_SPRAYER_DEFAULT_PUMP_MIN         0       // default minimum pump speed expressed as a percentage from 0 to 100
@@ -83,5 +81,3 @@ private:
     uint32_t        _speed_over_min_time;   // time at which we reached speed minimum
     uint32_t        _speed_under_min_time;  // time at which we fell below speed minimum
 };
-
-#endif /* AC_SPRAYER_H */

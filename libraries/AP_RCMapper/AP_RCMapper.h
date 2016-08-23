@@ -1,10 +1,9 @@
 /// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
-#ifndef AP_RCMAPPER_H
-#define AP_RCMAPPER_H
+#pragma once
 
 #include <inttypes.h>
-#include <AP_Common.h>
-#include <AP_Param.h>
+#include <AP_Common/AP_Common.h>
+#include <AP_Param/AP_Param.h>
 
 class RCMapper
 {
@@ -34,4 +33,3 @@ private:
     AP_Int8 _ch_yaw;
     AP_Int8 _ch_throttle;
 };
-#endif

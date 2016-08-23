@@ -22,13 +22,13 @@
 //
 //  Code by Holger Steinhaus
 
-#include <AP_HAL.h>
+#include <AP_HAL/AP_HAL.h>
 #if CONFIG_HAL_BOARD == HAL_BOARD_PX4
 #include "AP_GPS_PX4.h"
 
 #include <uORB/uORB.h>
 
-#include <math.h>
+#include <cmath>
 
 extern const AP_HAL::HAL& hal;
 
@@ -39,9 +39,9 @@ AP_GPS_PX4::AP_GPS_PX4(AP_GPS &_gps, AP_GPS::GPS_State &_state, AP_HAL::UARTDriv
 }
 
 
-#define MS_PER_WEEK             7*24*3600*1000LL
-#define DELTA_POSIX_GPS_EPOCH   315964800LL*1000LL
-#define LEAP_MS_GPS_2014        16*1000LL
+const uint64_t MS_PER_WEEK            = ((uint64_t)7)*24*3600*1000;
+const uint64_t DELTA_POSIX_GPS_EPOCH  = ((uint64_t)3657)*24*3600*1000;
+const uint64_t LEAP_MS_GPS_2016       = ((uint64_t)17)*1000;
 
 // update internal state if new GPS information is available
 bool
@@ -52,7 +52,7 @@ AP_GPS_PX4::read(void)
 
     if (updated) {
         if (OK == orb_copy(ORB_ID(vehicle_gps_position), _gps_sub, &_gps_pos)) {
-            state.last_gps_time_ms = hal.scheduler->millis();
+            state.last_gps_time_ms = AP_HAL::millis();
             state.status  = (AP_GPS::GPS_Status) (_gps_pos.fix_type | AP_GPS::NO_FIX);
             state.num_sats = _gps_pos.satellites_used;
             state.hdop = uint16_t(_gps_pos.eph*100.0f + .5f);
@@ -63,18 +63,19 @@ AP_GPS_PX4::read(void)
                 state.location.alt = _gps_pos.alt/10;
 
                 state.ground_speed = _gps_pos.vel_m_s;
-                state.ground_course_cd = int32_t(double(_gps_pos.cog_rad) / M_PI * 18000. +.5);
+                state.ground_course = wrap_360(degrees(_gps_pos.cog_rad));
+                state.hdop = _gps_pos.eph*100;
 
                 // convert epoch timestamp back to gps epoch - evil hack until we get the genuine
                 // raw week information (or APM switches to Posix epoch ;-) )
-                uint64_t epoch_ms = uint64_t(_gps_pos.time_gps_usec/1000.+.5);
-                uint64_t gps_ms = epoch_ms - DELTA_POSIX_GPS_EPOCH + LEAP_MS_GPS_2014;
-                state.time_week = uint16_t(gps_ms / uint64_t(MS_PER_WEEK));
-                state.time_week_ms = uint32_t(gps_ms - uint64_t(state.time_week)*MS_PER_WEEK);
+                uint64_t epoch_ms = _gps_pos.time_utc_usec/1000;
+                uint64_t gps_ms = epoch_ms - DELTA_POSIX_GPS_EPOCH + LEAP_MS_GPS_2016;
+                state.time_week = (uint16_t)(gps_ms / MS_PER_WEEK);
+                state.time_week_ms = (uint32_t)(gps_ms - (state.time_week)*MS_PER_WEEK);
 
-                if (_gps_pos.time_gps_usec == 0) {
+                if (_gps_pos.time_utc_usec == 0) {
                   // This is a work-around for https://github.com/PX4/Firmware/issues/1474
-                  // reject position reports with invalid time, as APM adjusts it's clock after the first lock has been aquired
+                  // reject position reports with invalid time, as APM adjusts it's clock after the first lock has been acquired
                   state.status = AP_GPS::NO_FIX;
                 }
             }
@@ -83,6 +84,8 @@ AP_GPS_PX4::read(void)
                 state.velocity.x = _gps_pos.vel_n_m_s;
                 state.velocity.y = _gps_pos.vel_e_m_s;
                 state.velocity.z = _gps_pos.vel_d_m_s;
+                state.speed_accuracy = _gps_pos.s_variance_m_s;
+                state.have_speed_accuracy = true;
             }
             else {
                 state.have_vertical_velocity = false;

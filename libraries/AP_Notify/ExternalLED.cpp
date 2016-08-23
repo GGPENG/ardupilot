@@ -14,9 +14,14 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+#include "ExternalLED.h"
 
-#include <AP_HAL.h>
-#include <AP_Notify.h>
+#include "AP_Notify.h"
+
+#include <AP_HAL/AP_HAL.h>
+
+#if (defined(EXTERNAL_LED_ARMED) && defined(EXTERNAL_LED_GPS) && \
+    defined(EXTERNAL_LED_MOTOR1) && defined(EXTERNAL_LED_MOTOR2))
 
 extern const AP_HAL::HAL& hal;
 
@@ -195,10 +200,7 @@ void ExternalLED::update(void)
         if (AP_Notify::flags.failsafe_battery || AP_Notify::flags.failsafe_radio) {
             // radio or battery failsafe indicated by fast flashing
             set_pattern(FAST_FLASH);
-        }else if(AP_Notify::flags.failsafe_gps || AP_Notify::flags.gps_glitching)
-            // gps failsafe indicated by oscillating
-            set_pattern(OSCILLATE);
-        else{
+        } else {
             // otherwise do whatever the armed led is doing
             motor_led1(_flags.armedled_on);
             motor_led2(_flags.armedled_on);
@@ -248,3 +250,7 @@ void ExternalLED::motor_led2(bool on_off)
         hal.gpio->write(EXTERNAL_LED_MOTOR2, _flags.motorled2_on);
     }
 }
+#else
+bool ExternalLED::init(void) {return true;}
+void ExternalLED::update(void) {return;}
+#endif

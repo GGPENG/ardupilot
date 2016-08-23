@@ -34,16 +34,20 @@ def reltopdir(path):
     return os.path.normpath(os.path.join(topdir(), path))
 
 
-def run_cmd(cmd, dir=".", show=False, output=False, checkfail=True):
+def run_cmd(cmd, dir=".", show=True, output=False, checkfail=True):
     '''run a shell command'''
+    shell = False
+    if not isinstance(cmd, list):
+        cmd = [cmd]
+        shell = True
     if show:
-        print("Running: '%s' in '%s'" % (cmd, dir))
+        print("Running: (%s) in (%s)" % (cmd_as_shell(cmd), dir,))
     if output:
-        return Popen([cmd], shell=True, stdout=PIPE, cwd=dir).communicate()[0]
+        return Popen(cmd, shell=shell, stdout=PIPE, cwd=dir).communicate()[0]
     elif checkfail:
-        return check_call(cmd, shell=True, cwd=dir)
+        return check_call(cmd, shell=shell, cwd=dir)
     else:
-        return call(cmd, shell=True, cwd=dir)
+        return call(cmd, shell=shell, cwd=dir)
 
 def rmfile(path):
     '''remove a file if it exists'''
@@ -57,28 +61,47 @@ def deltree(path):
     run_cmd('rm -rf %s' % path)
 
 
+def relwaf():
+    return "./modules/waf/waf-light"
 
-def build_SIL(atype, target='sitl'):
+def waf_configure(board, j=None, debug=False):
+    cmd_configure = [relwaf(), "configure", "--board", board]
+    if debug:
+        cmd_configure.append('--debug')
+    if j is not None:
+        cmd_configure.extend(['-j', str(j)])
+    run_cmd(cmd_configure, dir=topdir(), checkfail=True)
+
+def waf_clean():
+    run_cmd([relwaf(), "clean"], dir=topdir(), checkfail=True)
+
+def build_SIL(build_target, j=None, debug=False, board='sitl'):
     '''build desktop SIL'''
-    run_cmd("make clean",
-            dir=reltopdir(atype),
-            checkfail=True)
-    run_cmd("make %s" % target,
-            dir=reltopdir(atype),
-            checkfail=True)
+
+    # first configure
+    waf_configure(board, j=j, debug=debug)
+
+    # then clean
+    waf_clean()
+
+    # then build
+    cmd_make = [relwaf(), "build", "--target", build_target]
+    if j is not None:
+        cmd_make.extend(['-j', str(j)])
+    run_cmd(cmd_make, dir=topdir(), checkfail=True, show=True)
     return True
 
-def build_AVR(atype, board='mega2560'):
-    '''build AVR binaries'''
-    config = open(reltopdir('config.mk'), mode='w')
-    config.write('''
-HAL_BOARD=HAL_BOARD_APM1
-BOARD=%s
-PORT=/dev/null
-''' % board)
-    config.close()
-    run_cmd("make clean", dir=reltopdir(atype),  checkfail=True)
-    run_cmd("make", dir=reltopdir(atype),  checkfail=True)
+def build_examples(board, j=None, debug=False, clean=False):
+    # first configure
+    waf_configure(board, j=j, debug=debug)
+
+    # then clean
+    if clean:
+        waf_clean()
+
+    # then build
+    cmd_make = [relwaf(), "examples"]
+    run_cmd(cmd_make, dir=topdir(), checkfail=True, show=True)
     return True
 
 
@@ -119,25 +142,71 @@ def pexpect_drain(p):
     except pexpect.TIMEOUT:
         pass
 
-def start_SIL(atype, valgrind=False, wipe=False, height=None):
+def cmd_as_shell(cmd):
+    return (" ".join([ '"%s"' % x for x in cmd ]))
+
+import re
+def make_safe_filename(text):
+    '''return a version of text safe for use as a filename'''
+    r = re.compile("([^a-zA-Z0-9_.+-])")
+    text.replace('/','-')
+    filename = r.sub(lambda m : "%" + str(hex(ord(str(m.group(1))))).upper(), text)
+    return filename
+
+import pexpect
+class SIL(pexpect.spawn):
+
+    def __init__(self, binary, valgrind=False, gdb=False, wipe=False, synthetic_clock=True, home=None, model=None, speedup=1, defaults_file=None):
+        self.binary = binary
+        self.model = model
+
+        cmd=[]
+        if valgrind and os.path.exists('/usr/bin/valgrind'):
+            cmd.extend(['valgrind', '-q', '--log-file=%s' % self.valgrind_log_filepath()])
+        if gdb:
+            f = open("/tmp/x.gdb", "w")
+            f.write("r\n");
+            f.close()
+            cmd.extend(['xterm', '-e', 'gdb', '-x', '/tmp/x.gdb', '--args'])
+
+        cmd.append(binary)
+        if wipe:
+            cmd.append('-w')
+        if synthetic_clock:
+            cmd.append('-S')
+        if home is not None:
+            cmd.extend(['--home', home])
+        if model is not None:
+            cmd.extend(['--model', model])
+        if speedup != 1:
+            cmd.extend(['--speedup', str(speedup)])
+        if defaults_file is not None:
+            cmd.extend(['--defaults', defaults_file])
+        print("Running: %s" % cmd_as_shell(cmd))
+        first = cmd[0]
+        rest = cmd[1:]
+        super(SIL,self).__init__(first, rest, logfile=sys.stdout, timeout=5)
+        delaybeforesend = 0
+        pexpect_autoclose(self)
+        # give time for parameters to properly setup
+        time.sleep(3)
+        if gdb:
+            # if we run GDB we do so in an xterm.  "Waiting for
+            # connection" is never going to appear on xterm's output.
+            #... so let's give it another magic second.
+            time.sleep(1)
+            # TODO: have a SITL-compiled ardupilot able to have its
+            # console on an output fd.
+        else:
+            self.expect('Waiting for connection',timeout=300)
+
+
+    def valgrind_log_filepath(self):
+        return make_safe_filename('%s-%s-valgrind.log' % (os.path.basename(self.binary),self.model,))
+
+def start_SIL(binary, **kwargs):
     '''launch a SIL instance'''
-    import pexpect
-    cmd=""
-    if valgrind and os.path.exists('/usr/bin/valgrind'):
-        cmd += 'valgrind -q --log-file=%s-valgrind.log ' % atype
-    executable = reltopdir('tmp/%s.build/%s.elf' % (atype, atype))
-    if not os.path.exists(executable):
-        executable = '/tmp/%s.build/%s.elf' % (atype, atype)
-    cmd += executable
-    if wipe:
-        cmd += ' -w'
-    if height is not None:
-        cmd += ' -H %u' % height
-    ret = pexpect.spawn(cmd, logfile=sys.stdout, timeout=5)
-    ret.delaybeforesend = 0
-    pexpect_autoclose(ret)
-    ret.expect('Waiting for connection')
-    return ret
+    return SIL(binary, **kwargs)
 
 def start_MAVProxy_SIL(atype, aircraft=None, setup=False, master='tcp:127.0.0.1:5760',
                        options=None, logfile=sys.stdout):
@@ -267,12 +336,13 @@ def BodyRatesToEarthRates(dcm, gyro):
     psiDot   = (q*sin(phi) + r*cos(phi))/cos(theta)
     return Vector3(phiDot, thetaDot, psiDot)
 
+radius_of_earth = 6378100.0 # in meters
+
 def gps_newpos(lat, lon, bearing, distance):
     '''extrapolate latitude/longitude given a heading and distance 
     thanks to http://www.movable-type.co.uk/scripts/latlong.html
     '''
     from math import sin, asin, cos, atan2, radians, degrees
-    radius_of_earth = 6378100.0 # in meters
     
     lat1 = radians(lat)
     lon1 = radians(lon)
@@ -285,6 +355,37 @@ def gps_newpos(lat, lon, bearing, distance):
                         cos(dr)-sin(lat1)*sin(lat2))
     return (degrees(lat2), degrees(lon2))
 
+
+def gps_distance(lat1, lon1, lat2, lon2):
+    '''return distance between two points in meters,
+    coordinates are in degrees
+    thanks to http://www.movable-type.co.uk/scripts/latlong.html'''
+    lat1 = math.radians(lat1)
+    lat2 = math.radians(lat2)
+    lon1 = math.radians(lon1)
+    lon2 = math.radians(lon2)
+    dLat = lat2 - lat1
+    dLon = lon2 - lon1
+
+    a = math.sin(0.5*dLat)**2 + math.sin(0.5*dLon)**2 * math.cos(lat1) * math.cos(lat2)
+    c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0-a))
+    return radius_of_earth * c
+
+def gps_bearing(lat1, lon1, lat2, lon2):
+    '''return bearing between two points in degrees, in range 0-360
+    thanks to http://www.movable-type.co.uk/scripts/latlong.html'''
+    lat1 = math.radians(lat1)
+    lat2 = math.radians(lat2)
+    lon1 = math.radians(lon1)
+    lon2 = math.radians(lon2)
+    dLat = lat2 - lat1
+    dLon = lon2 - lon1
+    y = math.sin(dLon) * math.cos(lat2)
+    x = math.cos(lat1)*math.sin(lat2) - math.sin(lat1)*math.cos(lat2)*math.cos(dLon)
+    bearing = math.degrees(math.atan2(y, x))
+    if bearing < 0:
+        bearing += 360.0
+    return bearing
 
 class Wind(object):
     '''a wind generation object'''
@@ -388,7 +489,7 @@ def apparent_wind(wind_sp, obj_speed, alpha):
 # (let's assume it's low, .e.g., 0.2), p : density of air (assume about 1
 # kg/m^3, the density just over 1500m elevation), v : relative speed of wind
 # (to the body), a : area acted on (this is captured by the cross_section
-# paramter).
+# parameter).
 # 
 # So then we have 
 # F(a) = 0.2 * 1/2 * v^2 * cross_section = 0.1 * v^2 * cross_section
@@ -411,7 +512,15 @@ def toVec(magnitude, angle):
     m.from_euler(0, 0, angle)
     return m.transposed() * v
 
+def constrain(value, minv, maxv):
+    '''constrain a value to a range'''
+    if value < minv:
+        value = minv
+    if value > maxv:
+        value = maxv
+    return value
 
 if __name__ == "__main__":
     import doctest
     doctest.testmod()
+

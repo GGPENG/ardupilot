@@ -18,11 +18,12 @@
  */
 
 
-#include <AP_HAL.h>
+#include <AP_HAL/AP_HAL.h>
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_PX4
+#if CONFIG_HAL_BOARD == HAL_BOARD_PX4  || CONFIG_HAL_BOARD == HAL_BOARD_VRBRAIN
 
-#include <AP_Airspeed_PX4.h>
+#include "AP_Airspeed_PX4.h"
+
 #include <drivers/drv_airspeed.h>
 #include <uORB/topics/differential_pressure.h>
 #include <sys/types.h>
@@ -30,11 +31,11 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-extern const AP_HAL::HAL& hal;
+extern const AP_HAL::HAL &hal;
 
 bool AP_Airspeed_PX4::init()
 {
-    _fd = open(AIRSPEED_DEVICE_PATH, O_RDONLY);
+    _fd = open(AIRSPEED0_DEVICE_PATH, O_RDONLY);
     if (_fd == -1) {
         return false;
     }
@@ -57,10 +58,10 @@ bool AP_Airspeed_PX4::get_differential_pressure(float &pressure)
     float tsum = 0;
     uint16_t count = 0;
     struct differential_pressure_s report;
-    
+
     while (::read(_fd, &report, sizeof(report)) == sizeof(report) &&
            report.timestamp != _last_timestamp) {
-        psum += report.differential_pressure_raw_pa;
+        psum += report.differential_pressure_raw_pa / _psi_range.get();
         tsum += report.temperature;
         count++;
         _last_timestamp = report.timestamp;
@@ -76,6 +77,11 @@ bool AP_Airspeed_PX4::get_differential_pressure(float &pressure)
 // read the temperature
 bool AP_Airspeed_PX4::get_temperature(float &temperature)
 {
+    if (_temperature < -80) {
+        // almost certainly a bad reading. The ETS driver on PX4
+        // returns -1000
+        return false;
+    }
     temperature = _temperature;
     return true;
 }

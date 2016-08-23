@@ -17,12 +17,14 @@
  * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#pragma GCC optimize("O3")
+
 #include "AP_Math.h"
 
 template <typename T>
 float Vector2<T>::length(void) const
 {
-	return pythagorous2(x, y);
+	return norm(x, y);
 }
 
 
@@ -113,13 +115,13 @@ Vector2<T> Vector2<T>::operator -(void) const
 template <typename T>
 bool Vector2<T>::operator ==(const Vector2<T> &v) const
 {
-    return (x==v.x && y==v.y);
+    return (is_equal(x,v.x) && is_equal(y,v.y));
 }
 
 template <typename T>
 bool Vector2<T>::operator !=(const Vector2<T> &v) const
 {
-    return (x!=v.x && y!=v.y);
+    return (!is_equal(x,v.x) || !is_equal(y,v.y));
 }
 
 template <typename T>

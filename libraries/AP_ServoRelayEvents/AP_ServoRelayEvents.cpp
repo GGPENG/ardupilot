@@ -18,10 +18,10 @@
  */
 
 
-#include <AP_HAL.h>
-#include <AP_Common.h>
-#include <AP_ServoRelayEvents.h>
-#include <RC_Channel.h>
+#include <AP_HAL/AP_HAL.h>
+#include <AP_Common/AP_Common.h>
+#include "AP_ServoRelayEvents.h"
+#include <RC_Channel/RC_Channel.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -99,17 +99,17 @@ bool AP_ServoRelayEvents::do_repeat_relay(uint8_t relay_num, int16_t _repeat, ui
 */
 void AP_ServoRelayEvents::update_events(void)
 {
-    if (repeat == 0 || (hal.scheduler->millis() - start_time_ms) < delay_ms) {
+    if (repeat == 0 || (AP_HAL::millis() - start_time_ms) < delay_ms) {
         return;
     }
 
-    start_time_ms = hal.scheduler->millis();
+    start_time_ms = AP_HAL::millis();
 
     switch (type) {
     case EVENT_TYPE_SERVO:
         hal.rcout->enable_ch(channel-1);
         if (repeat & 1) {
-            hal.rcout->write(channel-1, RC_Channel::rc_channel(channel-1)->radio_trim);
+            hal.rcout->write(channel-1, RC_Channel::rc_channel(channel-1)->get_radio_trim());
         } else {
             hal.rcout->write(channel-1, servo_value);
         }

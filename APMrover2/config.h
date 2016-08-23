@@ -19,6 +19,7 @@
 //
 // - Try to keep this file organised in the same order as APM_Config.h.example
 //
+#pragma once
 
 #include "defines.h"
 
@@ -32,31 +33,12 @@
 /// change in your local copy of APM_Config.h.
 ///
 
-#if defined( __AVR_ATmega1280__ )
- // default choices for a 1280. We can't fit everything in, so we 
- // make some popular choices by default
- #define LOGGING_ENABLED DISABLED
- #ifndef MOUNT
- # define MOUNT DISABLED
- #endif
- #ifndef CAMERA
- # define CAMERA DISABLED
- #endif
-#endif
-
 // Just so that it's completely clear...
 #define ENABLED			1
 #define DISABLED		0
 
 //////////////////////////////////////////////////////////////////////////////
 // sensor types
-
-#define CONFIG_BARO     HAL_BARO_DEFAULT
-#define CONFIG_COMPASS  HAL_COMPASS_DEFAULT
-
-#ifdef HAL_SERIAL0_BAUD_DEFAULT
-# define SERIAL0_BAUD HAL_SERIAL0_BAUD_DEFAULT
-#endif
 
 //////////////////////////////////////////////////////////////////////////////
 // HIL_MODE                                 OPTIONAL
@@ -65,28 +47,12 @@
  #define HIL_MODE        HIL_MODE_DISABLED
 #endif
 
-#if HIL_MODE != HIL_MODE_DISABLED       // we are in HIL mode
- #undef CONFIG_BARO
- #define CONFIG_BARO HAL_BARO_HIL
- #undef  CONFIG_COMPASS
- #define CONFIG_COMPASS HAL_COMPASS_HIL
-#endif
-
-#if CONFIG_HAL_BOARD == HAL_BOARD_APM1
-# define BATTERY_PIN_1	  0
-# define CURRENT_PIN_1	  1
-#elif CONFIG_HAL_BOARD == HAL_BOARD_APM2
-# define BATTERY_PIN_1	  1
-# define CURRENT_PIN_1	  2
-#elif CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
 # define BATTERY_PIN_1	  1
 # define CURRENT_PIN_1	  2
 #elif CONFIG_HAL_BOARD == HAL_BOARD_PX4
 # define BATTERY_PIN_1	  -1
 # define CURRENT_PIN_1	  -1
-#elif CONFIG_HAL_BOARD == HAL_BOARD_FLYMAPLE
-# define BATTERY_PIN_1     20
-# define CURRENT_PIN_1	   19
 #elif CONFIG_HAL_BOARD == HAL_BOARD_LINUX
 # define BATTERY_PIN_1     -1
 # define CURRENT_PIN_1	   -1
@@ -106,29 +72,13 @@
 # define MAV_SYSTEM_ID		1
 #endif
 
-//////////////////////////////////////////////////////////////////////////////
-// Serial port speeds.
-//
-#ifndef SERIAL0_BAUD
-# define SERIAL0_BAUD			115200
-#endif
-#ifndef SERIAL1_BAUD
-# define SERIAL1_BAUD			 57600
-#endif
-#ifndef SERIAL2_BAUD
-# define SERIAL2_BAUD			 57600
-#endif
 
 //////////////////////////////////////////////////////////////////////////////
 // FrSky telemetry support
 //
 
 #ifndef FRSKY_TELEM_ENABLED
-#if CONFIG_HAL_BOARD == HAL_BOARD_APM1 || CONFIG_HAL_BOARD == HAL_BOARD_APM2
- # define FRSKY_TELEM_ENABLED DISABLED
-#else
- # define FRSKY_TELEM_ENABLED ENABLED
-#endif
+#define FRSKY_TELEM_ENABLED ENABLED
 #endif
 
 
@@ -241,21 +191,7 @@
 // AIRSPEED_CRUISE
 //
 #ifndef SPEED_CRUISE
-# define SPEED_CRUISE		3 // 3 m/s
-#endif
-
-#ifndef GSBOOST
-# define GSBOOST		0
-#endif
-#ifndef GSBOOST
-# define GSBOOST		0
-#endif
-#ifndef NUDGE_OFFSET
-# define NUDGE_OFFSET		0
-#endif
-
-#ifndef E_GLIDER
-# define E_GLIDER		ENABLED
+# define SPEED_CRUISE		5 // in m/s
 #endif
 
 #ifndef TURN_GAIN
@@ -294,54 +230,18 @@
 
 
 //////////////////////////////////////////////////////////////////////////////
-// Crosstrack compensation
-//
-#ifndef XTRACK_GAIN
-# define XTRACK_GAIN          1 // deg/m
-#endif
-#ifndef XTRACK_ENTRY_ANGLE
-# define XTRACK_ENTRY_ANGLE   50 // deg
-#endif
-# define XTRACK_GAIN_SCALED XTRACK_GAIN*100
-# define XTRACK_ENTRY_ANGLE_CENTIDEGREE XTRACK_ENTRY_ANGLE*100
-
-//////////////////////////////////////////////////////////////////////////////
 // Dataflash logging control
 //
 #ifndef LOGGING_ENABLED
 # define LOGGING_ENABLED		ENABLED
 #endif
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_APM1 || CONFIG_HAL_BOARD == HAL_BOARD_APM2
-#define DEFAULT_LOG_BITMASK     \
-    MASK_LOG_ATTITUDE_MED | \
-    MASK_LOG_GPS | \
-    MASK_LOG_PM | \
-    MASK_LOG_CTUN | \
-    MASK_LOG_NTUN | \
-    MASK_LOG_MODE | \
-    MASK_LOG_CMD | \
-    MASK_LOG_SONAR | \
-    MASK_LOG_COMPASS | \
-    MASK_LOG_CURRENT | \
-    MASK_LOG_STEERING | \
-    MASK_LOG_CAMERA
-#else
-// other systems have plenty of space for full logs
 #define DEFAULT_LOG_BITMASK   0xffff
-#endif
-
 
 
 //////////////////////////////////////////////////////////////////////////////
 // Developer Items
 //
-
-#ifndef STANDARD_SPEED
-# define STANDARD_SPEED		3.0
-#define STANDARD_SPEED_SQUARED (STANDARD_SPEED * STANDARD_SPEED)
-#endif
-#define STANDARD_THROTTLE_SQUARED (THROTTLE_CRUISE * THROTTLE_CRUISE)
 
 // use this to enable servos in HIL mode
 #ifndef HIL_SERVOS
@@ -350,7 +250,7 @@
 
 // use this to completely disable the CLI
 #ifndef CLI_ENABLED
-# define CLI_ENABLED ENABLED
+#define CLI_ENABLED ENABLED
 #endif
 
 // if RESET_SWITCH_CH is not zero, then this is the PWM value on
@@ -359,22 +259,4 @@
 // fence breach)
 #ifndef RESET_SWITCH_CHAN_PWM
 # define RESET_SWITCH_CHAN_PWM 1750
-#endif
-
-#ifndef BOOSTER
-# define BOOSTER              2    // booster factor x1 = 1 or x2 = 2
-#endif
-
-#ifndef SONAR_ENABLED
-# define SONAR_ENABLED       DISABLED
-#endif
-
-/*
-  build a firmware version string.
-  GIT_VERSION comes from Makefile builds
-*/
-#ifndef GIT_VERSION
-#define FIRMWARE_STRING THISFIRMWARE
-#else
-#define FIRMWARE_STRING THISFIRMWARE " (" GIT_VERSION ")"
 #endif

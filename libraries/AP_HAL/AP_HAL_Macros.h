@@ -1,5 +1,4 @@
-#ifndef __AP_HAL_MACROS_H__
-#define __AP_HAL_MACROS_H__
+#pragma once
 
 /*
   macros to allow code to build on multiple platforms more easily
@@ -17,4 +16,4 @@
 # define constexpr const
 #endif
 
-#endif // __AP_HAL_MACROS_H__
+#define NORETURN __attribute__ ((noreturn))

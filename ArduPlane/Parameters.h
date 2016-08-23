@@ -1,9 +1,7 @@
 // -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
+#pragma once
 
-#ifndef PARAMETERS_H
-#define PARAMETERS_H
-
-#include <AP_Common.h>
+#include <AP_Common/AP_Common.h>
 
 // Global parameter class.
 //
@@ -51,6 +49,9 @@ public:
         k_param_format_version = 0,
         k_param_software_type,
         k_param_num_resets,
+        k_param_NavEKF2,
+        k_param_g2,
+        k_param_avoidance_adsb,
 
         // Misc
         //
@@ -91,7 +92,7 @@ public:
         k_param_scheduler,
         k_param_relay,
         k_param_takeoff_throttle_delay,
-        k_param_skip_gyro_cal,
+        k_param_skip_gyro_cal, // unused
         k_param_auto_fbw_steer,
         k_param_waypoint_max_radius,
         k_param_ground_steer_alt,        
@@ -101,15 +102,15 @@ public:
         k_param_sonar_old, // unused
         k_param_log_bitmask,
         k_param_BoardConfig,
-        k_param_rssi_range,
+        k_param_rssi_range,     // unused, replaced by rssi_ library parameters
         k_param_flapin_channel,
         k_param_flaperon_output,
         k_param_gps,
         k_param_autotune_level,
         k_param_rally,
-        k_param_serial0_baud,
-        k_param_serial1_baud,
-        k_param_serial2_baud,
+        k_param_serial0_baud,           // deprecated
+        k_param_serial1_baud,           // deprecated
+        k_param_serial2_baud,           // deprecated
         k_param_takeoff_tdrag_elevator,
         k_param_takeoff_tdrag_speed1,
         k_param_takeoff_rotate_speed,
@@ -119,7 +120,7 @@ public:
         k_param_terrain,
         k_param_terrain_follow,
         k_param_stab_pitch_down_cd_old, // deprecated
-        k_param_glide_slope_threshold,
+        k_param_glide_slope_min,
         k_param_stab_pitch_down,
         k_param_terrain_lookahead,
         k_param_fbwa_tdrag_chan,
@@ -130,17 +131,32 @@ public:
         k_param_rtl_autoland,
         k_param_override_channel,
         k_param_stall_prevention,
-#if OPTFLOW == ENABLED
         k_param_optflow,
-#endif
-
-        // 100: Arming parameters
+        k_param_cli_enabled,
+        k_param_trim_rc_at_start,
+        k_param_hil_mode,
+        k_param_land_disarm_delay,
+        k_param_glide_slope_threshold,
+        k_param_rudder_only,
+        k_param_gcs3,            // 93
+        k_param_gcs_pid_mask,
+        k_param_crash_detection_enable,
+        k_param_land_abort_throttle_enable,
+        k_param_rssi = 97,
+        k_param_rpm_sensor,
+        k_param_parachute,
         k_param_arming = 100,
+        k_param_parachute_channel,
+        k_param_crash_accel_threshold,
+        k_param_override_safety,
+        k_param_land_throttle_slewrate, // 104
 
         // 105: Extra parameters
         k_param_fence_retalt = 105,
         k_param_fence_autoenable,
         k_param_fence_ret_rally,
+        k_param_q_attitude_control,
+        k_param_takeoff_pitch_limit_reduction_sec,
 
         // 110: Telemetry control
         //
@@ -153,7 +169,7 @@ public:
         k_param_serial0_baud_old,   // deprecated
         k_param_gcs2,               // stream rates for uartD
         k_param_serial2_baud_old,   // deprecated
-        k_param_serial2_protocol,
+        k_param_serial2_protocol,   // deprecated
 
         // 120: Fly-by-wire control
         //
@@ -166,6 +182,7 @@ public:
         k_param_acro_roll_rate,
         k_param_acro_pitch_rate,
         k_param_acro_locking,
+        k_param_use_reverse_thrust = 129,
 
         //
         // 130: Sensor parameters
@@ -187,6 +204,10 @@ public:
         k_param_curr_amp_offset,
         k_param_NavEKF,  // Extended Kalman Filter Inertial Navigation Group
         k_param_mission, // mission library
+        k_param_serial_manager, // serial manager library
+        k_param_NavEKF2_old,  // deprecated
+        k_param_land_pre_flare_alt,
+        k_param_land_pre_flare_airspeed = 149,
 
         //
         // 150: Navigation parameters
@@ -208,15 +229,18 @@ public:
         //
         k_param_camera = 160,
         k_param_camera_mount,
-        k_param_camera_mount2,
+        k_param_camera_mount2,      // unused
+        k_param_adsb,
+        k_param_notify,
+        k_param_land_pre_flare_sec = 165,
 
         //
         // Battery monitoring parameters
         //
         k_param_battery = 166,
-        k_param_rssi_pin,
-        k_param_battery_volt_pin,   // unused
-        k_param_battery_curr_pin,   // unused - 169
+        k_param_rssi_pin,               // unused, replaced by rssi_ library parameters - 167
+        k_param_battery_volt_pin,       // unused - 168
+        k_param_battery_curr_pin,       // unused - 169
 
         //
         // 170: Radio settings
@@ -252,6 +276,7 @@ public:
         k_param_long_fs_timeout,
         k_param_rc_13,
         k_param_rc_14,
+        k_param_tuning,
 
         //
         // 200: Feed-forward gains
@@ -261,6 +286,11 @@ public:
         k_param_kff_pitch_to_throttle, // unused
         k_param_kff_throttle_to_pitch,
         k_param_scaling_speed,
+        k_param_quadplane,
+        k_param_rtl_radius,
+        k_param_land_then_servos_neutral,
+        k_param_rc_15,
+        k_param_rc_16,
 
         //
         // 210: flight modes
@@ -272,6 +302,9 @@ public:
         k_param_flight_mode4,
         k_param_flight_mode5,
         k_param_flight_mode6,
+        k_param_initial_mode,
+        k_param_land_slope_recalc_shallow_threshold,
+        k_param_land_slope_recalc_steep_threshold_to_abort,
 
         //
         // 220: Waypoint data
@@ -289,7 +322,7 @@ public:
 
         // other objects
         k_param_sitl = 230,
-        k_param_obc,
+        k_param_afs,
         k_param_rollController,
         k_param_pitchController,
         k_param_yawController,
@@ -310,6 +343,11 @@ public:
         k_param_pidNavPitchAltitude, // unused
         k_param_pidWheelSteer, // unused
 
+        k_param_mixing_offset,
+        k_param_dspoiler_rud_rate,
+
+        k_param_DataFlash = 253, // Logging Group
+
         // 254,255: reserved
     };
 
@@ -320,19 +358,18 @@ public:
     //
     AP_Int16 sysid_this_mav;
     AP_Int16 sysid_my_gcs;
-    AP_Int16 serial0_baud;
-    AP_Int16 serial1_baud;
-#if MAVLINK_COMM_NUM_BUFFERS > 2
-    AP_Int16 serial2_baud;
-    AP_Int8  serial2_protocol;
-#endif
     AP_Int8 telem_delay;
-
-#if HIL_MODE != HIL_MODE_DISABLED
-    AP_Float hil_err_limit;
+#if CLI_ENABLED == ENABLED
+    AP_Int8 cli_enabled;
 #endif
+
+    AP_Float hil_err_limit;
 
     AP_Int8  rtl_autoland;
+
+    AP_Int8  trim_rc_at_start;
+    AP_Int8  crash_accel_threshold;
+    AP_Int8  crash_detection_enable;
 
     // Feed-forward gains
     //
@@ -352,8 +389,6 @@ public:
     // attitude controller type.
     AP_Int8  att_controller;
 
-    // skip gyro calibration
-    AP_Int8  skip_gyro_cal;
     AP_Int8  auto_fbw_steer;
 
     // Estimation
@@ -367,6 +402,7 @@ public:
     AP_Int16 waypoint_radius;
     AP_Int16 waypoint_max_radius;
     AP_Int16 loiter_radius;
+    AP_Int16 rtl_radius;
 
 #if GEOFENCE_ENABLED == ENABLED
     AP_Int8 fence_action;
@@ -391,6 +427,7 @@ public:
     AP_Int8 throttle_fs_enabled;
     AP_Int16 throttle_fs_value;
     AP_Int8 throttle_nudge;
+    AP_Int16 use_reverse_thrust;
 
     // Failsafe
     AP_Int8 short_fs_action;
@@ -410,10 +447,10 @@ public:
     AP_Int8 flight_mode4;
     AP_Int8 flight_mode5;
     AP_Int8 flight_mode6;
+    AP_Int8 initial_mode;
 
     // Navigational maneuvering limits
     //
-    AP_Int16 roll_limit_cd;
     AP_Int16 alt_offset;
     AP_Int16 acro_roll_rate;
     AP_Int16 acro_pitch_rate;
@@ -425,10 +462,13 @@ public:
     AP_Int8 mix_mode;
     AP_Int8 vtail_output;
     AP_Int8 elevon_output;
+    AP_Int8 rudder_only;
     AP_Float mixing_gain;
     AP_Int8 reverse_elevons;
     AP_Int8 reverse_ch1_elevon;
     AP_Int8 reverse_ch2_elevon;
+    AP_Int16 mixing_offset;
+    AP_Int16 dspoiler_rud_rate;
     AP_Int16 num_resets;
     AP_Int32 log_bitmask;
     AP_Int8 reset_switch_chan;
@@ -436,12 +476,19 @@ public:
     AP_Int32 airspeed_cruise_cm;
     AP_Int32 RTL_altitude_cm;
     AP_Float land_flare_alt;
-    AP_Float land_flare_sec;
+    AP_Int8 land_disarm_delay;
+    AP_Int8 land_then_servos_neutral;
+    AP_Int8 land_abort_throttle_enable;
+    AP_Float land_pre_flare_alt;
+    AP_Float land_pre_flare_sec;
+    AP_Float land_slope_recalc_shallow_threshold;
+    AP_Float land_slope_recalc_steep_threshold_to_abort;
     AP_Int32 min_gndspeed_cm;
     AP_Int16 pitch_trim_cd;
     AP_Int16 FBWB_min_altitude_cm;
-#if HIL_MODE != HIL_MODE_DISABLED
     AP_Int8  hil_servos;
+#if HIL_SUPPORT
+    AP_Int8  hil_mode;
 #endif
 
     AP_Int8 compass_enabled;
@@ -450,9 +497,7 @@ public:
     AP_Int8 flap_2_percent;
     AP_Int8 flap_2_speed;
     AP_Int8 land_flap_percent;
-    AP_Int8 takeoff_flap_percent;
-    AP_Int8 rssi_pin;
-    AP_Float rssi_range;             // allows to set max voltage for rssi pin such as 5.0, 3.3 etc.     
+    AP_Int8 takeoff_flap_percent;  
     AP_Int8 inverted_flight_ch;             // 0=disabled, 1-8 is channel for inverted flight trigger
     AP_Int8 stick_mixing;
     AP_Float takeoff_throttle_min_speed;
@@ -462,7 +507,8 @@ public:
     AP_Float takeoff_tdrag_speed1;
     AP_Float takeoff_rotate_speed;
     AP_Int8 takeoff_throttle_slewrate;
-    AP_Int8 takeoff_throttle_max;
+    AP_Float takeoff_pitch_limit_reduction_sec;
+    AP_Int8 land_throttle_slewrate;
     AP_Int8 level_roll_limit;
     AP_Int8 flapin_channel;
     AP_Int8 flaperon_output;
@@ -470,13 +516,17 @@ public:
     AP_Int8 terrain_follow;
     AP_Int16 terrain_lookahead;
 #endif
-    AP_Int16 glide_slope_threshold;
+    AP_Int16 glide_slope_min;
+    AP_Float glide_slope_threshold;
     AP_Int8 fbwa_tdrag_chan;
     AP_Int8 rangefinder_landing;
     AP_Int8 flap_slewrate;
 #if CONFIG_HAL_BOARD == HAL_BOARD_PX4
     AP_Int8 override_channel;
+    AP_Int8 override_safety;
 #endif
+    AP_Int16 gcs_pid_mask;
+    AP_Int8 parachute_channel;
 
     // RC channels
     RC_Channel rc_1;
@@ -487,18 +537,14 @@ public:
     RC_Channel_aux rc_6;
     RC_Channel_aux rc_7;
     RC_Channel_aux rc_8;
-#if CONFIG_HAL_BOARD == HAL_BOARD_PX4 || CONFIG_HAL_BOARD == HAL_BOARD_VRBRAIN
     RC_Channel_aux rc_9;
-#endif
-#if CONFIG_HAL_BOARD == HAL_BOARD_APM2 || CONFIG_HAL_BOARD == HAL_BOARD_PX4 || CONFIG_HAL_BOARD == HAL_BOARD_VRBRAIN
     RC_Channel_aux rc_10;
     RC_Channel_aux rc_11;
-#endif
-#if CONFIG_HAL_BOARD == HAL_BOARD_PX4 || CONFIG_HAL_BOARD == HAL_BOARD_VRBRAIN
     RC_Channel_aux rc_12;
     RC_Channel_aux rc_13;
     RC_Channel_aux rc_14;
-#endif
+    RC_Channel_aux rc_15;
+    RC_Channel_aux rc_16;
     uint8_t _dummy;
 
     Parameters() :
@@ -512,22 +558,33 @@ public:
         rc_6                                    (CH_6),
         rc_7                                    (CH_7),
         rc_8                                    (CH_8),
-#if CONFIG_HAL_BOARD == HAL_BOARD_PX4 || CONFIG_HAL_BOARD == HAL_BOARD_VRBRAIN
         rc_9                                    (CH_9),
-#endif
-#if CONFIG_HAL_BOARD == HAL_BOARD_APM2 || CONFIG_HAL_BOARD == HAL_BOARD_PX4 || CONFIG_HAL_BOARD == HAL_BOARD_VRBRAIN
         rc_10                                   (CH_10),
         rc_11                                   (CH_11),
-#endif
-#if CONFIG_HAL_BOARD == HAL_BOARD_PX4 || CONFIG_HAL_BOARD == HAL_BOARD_VRBRAIN
         rc_12                                   (CH_12),
         rc_13                                   (CH_13),
         rc_14                                   (CH_14),
-#endif
+        rc_15                                   (CH_15),
+        rc_16                                   (CH_16),
         _dummy(0)
         {}
 };
 
-extern const AP_Param::Info var_info[];
+/*
+  2nd block of parameters, to avoid going past 256 top level keys
+ */
+class ParametersG2 {
+public:
+    ParametersG2(void);
 
-#endif // PARAMETERS_H
+    // var_info for holding Parameter information
+    static const struct AP_Param::GroupInfo var_info[];
+
+    // button reporting library
+    AP_Button button;
+
+    // internal combustion engine control
+    AP_ICEngine ice_control;
+};
+
+extern const AP_Param::Info var_info[];

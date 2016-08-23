@@ -6,12 +6,10 @@
  * handle DO_SET_SERVO, DO_REPEAT_SERVO, DO_SET_RELAY and
  * DO_REPEAT_RELAY commands
  */
+#pragma once
 
-#ifndef __AP_SERVORELAYEVENTS_H__
-#define __AP_SERVORELAYEVENTS_H__
-
-#include <AP_Param.h>
-#include <AP_Relay.h>
+#include <AP_Param/AP_Param.h>
+#include <AP_Relay/AP_Relay.h>
 
 class AP_ServoRelayEvents {
 public:
@@ -62,5 +60,3 @@ private:
 	// PWM for servos
 	uint16_t servo_value;
 };
-
-#endif /* AP_SERVORELAYEVENTS_H_ */

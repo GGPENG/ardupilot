@@ -16,9 +16,9 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <AP_HAL.h>
+#include <AP_HAL/AP_HAL.h>
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_PX4
+#if CONFIG_HAL_BOARD == HAL_BOARD_PX4 || CONFIG_HAL_BOARD == HAL_BOARD_VRBRAIN
 #include "ToneAlarm_PX4.h"
 #include "AP_Notify.h"
 
@@ -59,18 +59,42 @@ const ToneAlarm_PX4::Tone ToneAlarm_PX4::_tones[] {
     { "MFT200L8G>C3", false },
     #define AP_NOTIFY_PX4_TONE_LOUD_LAND_WARNING_CTS 11
     { "MBT200L2A-G-A-G-A-G-", true },
-    #define AP_NOTIFY_PX4_TONE_LOUD_LOST_COPTER_CTS 12
+    #define AP_NOTIFY_PX4_TONE_LOUD_VEHICLE_LOST_CTS 12
     { "MBT200>B#1", true },
     #define AP_NOTIFY_PX4_TONE_LOUD_BATTERY_ALERT_CTS 13
     { "MBNT255>B#8B#8B#8B#8B#8B#8B#8B#8B#8B#8B#8B#8B#8B#8B#8B#8", true },
+    #define AP_NOTIFY_PX4_TONE_QUIET_COMPASS_CALIBRATING_CTS 14
+    { "MBNT255<C16P2", true },
+    #define AP_NOTIFY_PX4_TONE_WAITING_FOR_THROW 15
+    { "MBNT90L4O2A#O3DFN0N0N0", true},
+    #define AP_NOTIFY_PX4_TONE_LOUD_1 16
+    { "MFT100L8>B", false},
+    #define AP_NOTIFY_PX4_TONE_LOUD_2 17
+    { "MFT100L8>BB", false},
+    #define AP_NOTIFY_PX4_TONE_LOUD_3 18
+    { "MFT100L8>BBB", false},
+    #define AP_NOTIFY_PX4_TONE_LOUD_4 19
+    { "MFT100L8>BBBB", false},
+    #define AP_NOTIFY_PX4_TONE_LOUD_5 20
+    { "MFT100L8>BBBBB", false},
+    #define AP_NOTIFY_PX4_TONE_LOUD_6 21
+    { "MFT100L8>BBBBBB", false},
+    #define AP_NOTIFY_PX4_TONE_LOUD_7 22
+    { "MFT100L8>BBBBBBB", false},
+    #define AP_NOTIFY_PX4_TONE_TUNING_START 23
+    { "MFT100L20>C#D#", false},
+    #define AP_NOTIFY_PX4_TONE_TUNING_SAVE 24
+    { "MFT100L10DBDB>", false},
+    #define AP_NOTIFY_PX4_TONE_TUNING_ERROR 25
+    { "MFT100L10>BBBBBBBB", false},
 };
 
 bool ToneAlarm_PX4::init()
 {
     // open the tone alarm device
-    _tonealarm_fd = open(TONEALARM_DEVICE_PATH, O_WRONLY);
+    _tonealarm_fd = open(TONEALARM0_DEVICE_PATH, O_WRONLY);
     if (_tonealarm_fd == -1) {
-        hal.console->printf("Unable to open " TONEALARM_DEVICE_PATH);
+        hal.console->printf("ToneAlarm_PX4: Unable to open " TONEALARM0_DEVICE_PATH);
         return false;
     }
     
@@ -86,7 +110,7 @@ bool ToneAlarm_PX4::init()
 // play_tune - play one of the pre-defined tunes
 void ToneAlarm_PX4::play_tone(const uint8_t tone_index)
 {
-    uint32_t tnow_ms = hal.scheduler->millis();
+    uint32_t tnow_ms = AP_HAL::millis();
     const Tone &tone_requested = _tones[tone_index];
 
     if(tone_requested.continuous) {
@@ -105,14 +129,14 @@ void ToneAlarm_PX4::play_string(const char *str) {
 
 void ToneAlarm_PX4::stop_cont_tone() {
     if(_cont_tone_playing == _tone_playing) {
-        play_string("stop");
+        play_string("");
         _tone_playing = -1;
     }
     _cont_tone_playing = -1;
 }
 
 void ToneAlarm_PX4::check_cont_tone() {
-    uint32_t tnow_ms = hal.scheduler->millis();
+    uint32_t tnow_ms = AP_HAL::millis();
     // if we are supposed to be playing a continuous tone,
     // and it was interrupted, and the interrupting tone has timed out,
     // resume the continuous tone
@@ -130,7 +154,49 @@ void ToneAlarm_PX4::update()
         return;
     }
 
+    // exit if buzzer is not enabled
+    if (pNotify->buzzer_enabled() == false) {
+        return;
+    }
+
     check_cont_tone();
+
+    if (AP_Notify::flags.compass_cal_running != flags.compass_cal_running) {
+        if(AP_Notify::flags.compass_cal_running) {
+            play_tone(AP_NOTIFY_PX4_TONE_QUIET_COMPASS_CALIBRATING_CTS);
+            play_tone(AP_NOTIFY_PX4_TONE_QUIET_POS_FEEDBACK);
+        } else {
+            if(_cont_tone_playing == AP_NOTIFY_PX4_TONE_QUIET_COMPASS_CALIBRATING_CTS) {
+                stop_cont_tone();
+            }
+        }
+    }
+    flags.compass_cal_running = AP_Notify::flags.compass_cal_running;
+
+    if (AP_Notify::events.compass_cal_canceled) {
+        play_tone(AP_NOTIFY_PX4_TONE_QUIET_NEU_FEEDBACK);
+        return;
+    }
+
+    if (AP_Notify::events.initiated_compass_cal) {
+        play_tone(AP_NOTIFY_PX4_TONE_QUIET_NEU_FEEDBACK);
+        return;
+    }
+
+    if (AP_Notify::events.compass_cal_saved) {
+        play_tone(AP_NOTIFY_PX4_TONE_QUIET_READY_OR_FINISHED);
+        return;
+    }
+
+    if (AP_Notify::events.compass_cal_failed) {
+        play_tone(AP_NOTIFY_PX4_TONE_QUIET_NEG_FEEDBACK);
+        return;
+    }
+
+    // don't play other tones if compass cal is running
+    if (AP_Notify::flags.compass_cal_running) {
+        return;
+    }
 
     // notify the user when autotune or mission completes
     if (AP_Notify::flags.armed && (AP_Notify::events.autotune_complete || AP_Notify::events.mission_complete)) {
@@ -171,11 +237,8 @@ void ToneAlarm_PX4::update()
     }
 
     // notify the user when arming fails
-    if (flags.arming_failed != AP_Notify::flags.arming_failed) {
-        flags.arming_failed = AP_Notify::flags.arming_failed;
-        if (flags.arming_failed) {
-            play_tone(AP_NOTIFY_PX4_TONE_QUIET_NEG_FEEDBACK);
-        }
+    if (AP_Notify::events.arming_failed) {
+        play_tone(AP_NOTIFY_PX4_TONE_QUIET_NEG_FEEDBACK);
     }
 
     // notify the user when RC contact is lost
@@ -233,6 +296,59 @@ void ToneAlarm_PX4::update()
             play_tone(AP_NOTIFY_PX4_TONE_LOUD_ATTENTION_NEEDED);
         }
     }
+
+    // lost vehicle tone
+    if (flags.vehicle_lost != AP_Notify::flags.vehicle_lost) {
+        flags.vehicle_lost = AP_Notify::flags.vehicle_lost;
+        if (flags.vehicle_lost) {
+            play_tone(AP_NOTIFY_PX4_TONE_LOUD_VEHICLE_LOST_CTS);
+        } else {
+            stop_cont_tone();
+        }
+    }
+
+    // waiting to be thrown vehicle tone
+    if (flags.waiting_for_throw != AP_Notify::flags.waiting_for_throw) {
+        flags.waiting_for_throw = AP_Notify::flags.waiting_for_throw;
+        if (flags.waiting_for_throw) {
+            play_tone(AP_NOTIFY_PX4_TONE_WAITING_FOR_THROW);
+        } else {
+            stop_cont_tone();
+        }
+    }
+
+    if (AP_Notify::events.tune_started) {
+        play_tone(AP_NOTIFY_PX4_TONE_TUNING_START);
+        AP_Notify::events.tune_started = 0;        
+    }
+    if (AP_Notify::events.tune_next) {
+        // signify which parameter in the set is starting
+        play_tone(AP_NOTIFY_PX4_TONE_LOUD_1 + (AP_Notify::events.tune_next-1));
+        AP_Notify::events.tune_next = 0;        
+    }
+    if (AP_Notify::events.tune_save) {
+        play_tone(AP_NOTIFY_PX4_TONE_TUNING_SAVE);
+        AP_Notify::events.tune_save = 0;
+    }
+    if (AP_Notify::events.tune_error) {
+        play_tone(AP_NOTIFY_PX4_TONE_TUNING_ERROR);
+        AP_Notify::events.tune_error = 0;
+    }
 }
+
+
+/*
+  handle a PLAY_TUNE message
+*/
+void ToneAlarm_PX4::handle_play_tune(mavlink_message_t *msg)
+{
+    // decode mavlink message
+    mavlink_play_tune_t packet;
+    
+    mavlink_msg_play_tune_decode(msg, &packet);
+
+    play_string(packet.tune);
+}
+
 
 #endif // CONFIG_HAL_BOARD == HAL_BOARD_PX4

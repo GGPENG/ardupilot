@@ -17,14 +17,13 @@ MODULES		+= drivers/stm32/adc
 MODULES		+= drivers/stm32/tone_alarm
 MODULES		+= drivers/led
 MODULES		+= drivers/px4fmu
-MODULES		+= drivers/px4io
-MODULES		+= drivers/px4flow
 MODULES		+= drivers/rgbled
 MODULES		+= drivers/mpu6000
 MODULES		+= drivers/hmc5883
 MODULES		+= drivers/ms5611
 MODULES		+= drivers/mb12xx
 MODULES		+= drivers/ll40ls
+MODULES		+= drivers/trone
 #MODULES	+= drivers/gps
 #MODULES	+= drivers/hil
 #MODULES	+= drivers/hott_telemetry
@@ -34,12 +33,13 @@ MODULES		+= drivers/airspeed
 MODULES		+= drivers/ets_airspeed
 MODULES		+= drivers/meas_airspeed
 MODULES		+= drivers/mkblctrl
+MODULES		+= drivers/batt_smbus
+MODULES		+= drivers/irlock
 
 #
 # System commands
 #
 MODULES		+= systemcmds/bl_update
-MODULES		+= systemcmds/boardinfo
 MODULES		+= systemcmds/mixer
 MODULES		+= systemcmds/perf
 MODULES		+= systemcmds/pwm
@@ -48,11 +48,17 @@ MODULES		+= systemcmds/top
 #MODULES	+= systemcmds/tests
 MODULES		+= systemcmds/nshterm
 MODULES         += systemcmds/mtd
+MODULES         += systemcmds/ver
+MODULES         += systemcmds/otp
+
 ifneq ($(wildcard $(PX4_ROOT)/src/systemcmds/reflect),)  
 MODULES         += systemcmds/reflect
 endif
 ifneq ($(wildcard $(PX4_ROOT)/src/systemcmds/motor_test),)  
 MODULES         += systemcmds/motor_test
+endif
+ifneq ($(wildcard $(PX4_ROOT)/src/systemcmds/usb_connected),)  
+MODULES         += systemcmds/usb_connected
 endif
 
 #

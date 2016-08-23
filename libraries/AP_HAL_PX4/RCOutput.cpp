@@ -1,6 +1,6 @@
 /// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
 
-#include <AP_HAL.h>
+#include <AP_HAL/AP_HAL.h>
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_PX4
 #include "RCOutput.h"
@@ -13,17 +13,25 @@
 #include <drivers/drv_pwm_output.h>
 #include <uORB/topics/actuator_direct.h>
 #include <drivers/drv_hrt.h>
+#include <drivers/drv_pwm_output.h>
+#include <drivers/drv_sbus.h>
 
 extern const AP_HAL::HAL& hal;
 
 using namespace PX4;
 
-void PX4RCOutput::init(void* unused) 
+/*
+  enable RCOUT_DEBUG_LATENCY to measure output latency using a logic
+  analyser. AUX6 will go high during the cork/push output. 
+ */
+#define RCOUT_DEBUG_LATENCY 0
+
+void PX4RCOutput::init()
 {
     _perf_rcout = perf_alloc(PC_ELAPSED, "APM_rcout");
-    _pwm_fd = open(PWM_OUTPUT_DEVICE_PATH, O_RDWR);
+    _pwm_fd = open(PWM_OUTPUT0_DEVICE_PATH, O_RDWR);
     if (_pwm_fd == -1) {
-        hal.scheduler->panic("Unable to open " PWM_OUTPUT_DEVICE_PATH);
+        AP_HAL::panic("Unable to open " PWM_OUTPUT0_DEVICE_PATH);
     }
     if (ioctl(_pwm_fd, PWM_SERVO_ARM, 0) != 0) {
         hal.console->printf("RCOutput: Unable to setup IO arming\n");
@@ -31,6 +39,7 @@ void PX4RCOutput::init(void* unused)
     if (ioctl(_pwm_fd, PWM_SERVO_SET_ARM_OK, 0) != 0) {
         hal.console->printf("RCOutput: Unable to setup IO arming OK\n");
     }
+
     _rate_mask = 0;
     _alt_fd = -1;    
     _servo_count = 0;
@@ -41,28 +50,29 @@ void PX4RCOutput::init(void* unused)
         return;
     }
 
-	_pwm_sub = orb_subscribe(ORB_ID_VEHICLE_CONTROLS);
+    for (uint8_t i=0; i<ORB_MULTI_MAX_INSTANCES; i++) {
+        _outputs[i].pwm_sub = orb_subscribe_multi(ORB_ID(actuator_outputs), i);
+    }
 
-    // mark number of outputs given by px4io as zero
-    _outputs.noutputs = 0;
-
+#if !defined(CONFIG_ARCH_BOARD_PX4FMU_V4)
     _alt_fd = open("/dev/px4fmu", O_RDWR);
     if (_alt_fd == -1) {
         hal.console->printf("RCOutput: failed to open /dev/px4fmu");
         return;
     }
+#endif
 
     // ensure not to write zeros to disabled channels
     _enabled_channels = 0;
-    for (int i=0; i < PX4_NUM_OUTPUT_CHANNELS; i++) {
+    for (uint8_t i=0; i < PX4_NUM_OUTPUT_CHANNELS; i++) {
         _period[i] = PWM_IGNORE_THIS_CHANNEL;
     }
 
     // publish actuator vaules on demand
-    _actuator_direct_pub = -1;
+    _actuator_direct_pub = NULL;
 
     // and armed state
-    _actuator_armed_pub = -1;
+    _actuator_armed_pub = NULL;
 }
 
 
@@ -84,19 +94,31 @@ void PX4RCOutput::_init_alt_channels(void)
     }
 }
 
-void PX4RCOutput::set_freq(uint32_t chmask, uint16_t freq_hz) 
+/*
+  set output frequency on outputs associated with fd
+ */
+void PX4RCOutput::set_freq_fd(int fd, uint32_t chmask, uint16_t freq_hz) 
 {
-    // we can't set this per channel yet
-    if (freq_hz > 50) {
+    // we can't set this per channel
+    if (freq_hz > 50 || freq_hz == 1) {
         // we're being asked to set the alt rate
-        if (ioctl(_pwm_fd, PWM_SERVO_SET_UPDATE_RATE, (unsigned long)freq_hz) != 0) {
+        if (_output_mode == MODE_PWM_ONESHOT) {
+            /*
+              set a 1Hz update for oneshot. This periodic output will
+              never actually trigger, instead we will directly trigger
+              the pulse after each push()
+             */
+            freq_hz = 1;
+        }
+        //::printf("SET_UPDATE_RATE %u\n", (unsigned)freq_hz);
+        if (ioctl(fd, PWM_SERVO_SET_UPDATE_RATE, (unsigned long)freq_hz) != 0) {
             hal.console->printf("RCOutput: Unable to set alt rate to %uHz\n", (unsigned)freq_hz);
             return;
         }
         _freq_hz = freq_hz;
     }
 
-    /* work out the new rate mask. The PX4IO board has 3 groups of servos. 
+    /* work out the new rate mask. The outputs have 3 groups of servos. 
 
        Group 0: channels 0 1
        Group 1: channels 4 5 6 7
@@ -107,7 +129,7 @@ void PX4RCOutput::set_freq(uint32_t chmask, uint16_t freq_hz)
        For the moment we never set the channels above 8 to more than
        50Hz
      */
-    if (freq_hz > 50) {
+    if (freq_hz > 50 || freq_hz == 1) {
         // we are setting high rates on the given channels
         _rate_mask |= chmask & 0xFF;
         if (_rate_mask & 0x3) {
@@ -132,8 +154,44 @@ void PX4RCOutput::set_freq(uint32_t chmask, uint16_t freq_hz)
         }
     }
 
-    if (ioctl(_pwm_fd, PWM_SERVO_SET_SELECT_UPDATE_RATE, _rate_mask) != 0) {
+    //::printf("SELECT_UPDATE_RATE 0x%02x\n", (unsigned)_rate_mask);
+    if (ioctl(fd, PWM_SERVO_SET_SELECT_UPDATE_RATE, _rate_mask) != 0) {
         hal.console->printf("RCOutput: Unable to set alt rate mask to 0x%x\n", (unsigned)_rate_mask);
+    }
+}
+
+/*
+  set output frequency
+ */
+void PX4RCOutput::set_freq(uint32_t chmask, uint16_t freq_hz) 
+{
+    if (freq_hz > 50 && _output_mode == MODE_PWM_ONESHOT) {
+        // rate is irrelevent in oneshot
+        return;
+    }
+
+    // re-fetch servo count as it might have changed due to a change in BRD_PWM_COUNT
+    if (_pwm_fd != -1 && ioctl(_pwm_fd, PWM_SERVO_GET_COUNT, (unsigned long)&_servo_count) != 0) {
+        hal.console->printf("RCOutput: Unable to get servo count\n");        
+        return;
+    }
+    if (_alt_fd != -1 && ioctl(_alt_fd, PWM_SERVO_GET_COUNT, (unsigned long)&_alt_servo_count) != 0) {
+        hal.console->printf("RCOutput: Unable to get alt servo count\n");        
+        return;
+    }
+    
+    // greater than 400 doesn't give enough room at higher periods for
+    // the down pulse
+    if (freq_hz > 400) {
+        freq_hz = 400;
+    }
+    uint32_t primary_mask = chmask & ((1UL<<_servo_count)-1);
+    uint32_t alt_mask = chmask >> _servo_count;
+    if (primary_mask && _pwm_fd != -1) {
+        set_freq_fd(_pwm_fd, primary_mask, freq_hz);
+    }
+    if (alt_mask && _alt_fd != -1) {
+        set_freq_fd(_alt_fd, alt_mask, freq_hz);
     }
 }
 
@@ -151,7 +209,7 @@ void PX4RCOutput::enable_ch(uint8_t ch)
         return;
     }
     if (ch >= 8 && !(_enabled_channels & (1U<<ch))) {
-        // this is the first enable of an auxillary channel - setup
+        // this is the first enable of an auxiliary channel - setup
         // aux channels now. This delayed setup makes it possible to
         // use BRD_PWM_COUNT to setup the number of PWM channels.
         _init_alt_channels();
@@ -206,21 +264,49 @@ void PX4RCOutput::set_failsafe_pwm(uint32_t chmask, uint16_t period_us)
 
 bool PX4RCOutput::force_safety_on(void)
 {
-    int ret = ioctl(_pwm_fd, PWM_SERVO_SET_FORCE_SAFETY_ON, 0);
-    return (ret == OK);
+    _safety_state_request = AP_HAL::Util::SAFETY_DISARMED;
+    _safety_state_request_last_ms = 1;
+    return true;
 }
 
 void PX4RCOutput::force_safety_off(void)
 {
-    int ret = ioctl(_pwm_fd, PWM_SERVO_SET_FORCE_SAFETY_OFF, 0);
-    if (ret != OK) {
-        hal.console->printf("Failed to force safety off\n");
+    _safety_state_request = AP_HAL::Util::SAFETY_ARMED;
+    _safety_state_request_last_ms = 1;
+}
+
+void PX4RCOutput::force_safety_pending_requests(void)
+{
+    // check if there is a pending saftey_state change. If so (timer != 0) then set it.
+    uint32_t now = AP_HAL::millis();
+    if (_safety_state_request_last_ms != 0 &&
+        now - _safety_state_request_last_ms >= 100) {
+        if (hal.util->safety_switch_state() == _safety_state_request &&
+            _safety_state_request_last_ms != 1) {
+            _safety_state_request_last_ms = 0;
+        } else if (_safety_state_request == AP_HAL::Util::SAFETY_DISARMED) {
+            // current != requested, set it
+            ioctl(_pwm_fd, PWM_SERVO_SET_FORCE_SAFETY_ON, 0);
+            _safety_state_request_last_ms = now;
+        } else if (_safety_state_request == AP_HAL::Util::SAFETY_ARMED) {
+            // current != requested, set it
+            ioctl(_pwm_fd, PWM_SERVO_SET_FORCE_SAFETY_OFF, 0);
+            _safety_state_request_last_ms = now;
+        }
+    }
+}
+
+void PX4RCOutput::force_safety_no_wait(void)
+{
+    if (_safety_state_request_last_ms != 0) {
+        _safety_state_request_last_ms = 1;
+        force_safety_pending_requests();
     }
 }
 
 void PX4RCOutput::write(uint8_t ch, uint16_t period_us)
 {
-    if (ch >= _servo_count + _alt_servo_count) {
+    if (ch >= PX4_NUM_OUTPUT_CHANNELS) {
         return;
     }
     if (!(_enabled_channels & (1U<<ch))) {
@@ -230,16 +316,15 @@ void PX4RCOutput::write(uint8_t ch, uint16_t period_us)
     if (ch >= _max_channel) {
         _max_channel = ch + 1;
     }
-    if (period_us != _period[ch]) {
+    /*
+      only mark an update is needed if there has been a change, or we
+      are in oneshot mode. In oneshot mode we always need to send the
+      output
+     */
+    if (period_us != _period[ch] ||
+        _output_mode == MODE_PWM_ONESHOT) {
         _period[ch] = period_us;
         _need_update = true;
-    }
-}
-
-void PX4RCOutput::write(uint8_t ch, uint16_t* period_us, uint8_t len)
-{
-    for (uint8_t i=0; i<len; i++) {
-        write(i, period_us[i]);
     }
 }
 
@@ -251,8 +336,12 @@ uint16_t PX4RCOutput::read(uint8_t ch)
     // if px4io has given us a value for this channel use that,
     // otherwise use the value we last sent. This makes it easier to
     // observe the behaviour of failsafe in px4io
-    if (ch < _outputs.noutputs) {
-        return _outputs.output[ch];
+    for (uint8_t i=0; i<ORB_MULTI_MAX_INSTANCES; i++) {
+        if (_outputs[i].pwm_sub >= 0 && 
+            ch < _outputs[i].outputs.noutputs &&
+            _outputs[i].outputs.output[ch] > 0) {
+            return _outputs[i].outputs.output[ch];
+        }
     }
     return _period[ch];
 }
@@ -261,6 +350,22 @@ void PX4RCOutput::read(uint16_t* period_us, uint8_t len)
 {
     for (uint8_t i=0; i<len; i++) {
         period_us[i] = read(i);
+    }
+}
+
+uint16_t PX4RCOutput::read_last_sent(uint8_t ch)
+{
+    if (ch >= PX4_NUM_OUTPUT_CHANNELS) {
+        return 0;
+    }
+
+    return _period[ch];
+}
+
+void PX4RCOutput::read_last_sent(uint16_t* period_us, uint8_t len)
+{
+    for (uint8_t i=0; i<len; i++) {
+        period_us[i] = read_last_sent(i);
     }
 }
 
@@ -280,7 +385,7 @@ void PX4RCOutput::_arm_actuators(bool arm)
     _armed.lockdown = false;
     _armed.force_failsafe = false;
 
-    if (_actuator_armed_pub == -1) {
+    if (_actuator_armed_pub == NULL) {
         _actuator_armed_pub = orb_advertise(ORB_ID(actuator_armed), &_armed);
     } else {
         orb_publish(ORB_ID(actuator_armed), _actuator_armed_pub, &_armed);
@@ -294,9 +399,15 @@ void PX4RCOutput::_publish_actuators(void)
 {
 	struct actuator_direct_s actuators;
 
+    if (_esc_pwm_min == 0 ||
+        _esc_pwm_max == 0) {
+        // not initialised yet
+        return;
+    }
+
 	actuators.nvalues = _max_channel;
-    if (actuators.nvalues > NUM_ACTUATORS_DIRECT) {
-        actuators.nvalues = NUM_ACTUATORS_DIRECT;
+    if (actuators.nvalues > actuators.NUM_ACTUATORS_DIRECT) {
+        actuators.nvalues = actuators.NUM_ACTUATORS_DIRECT;
     }
     // don't publish more than 8 actuators for now, as the uavcan ESC
     // driver refuses to update any motors if you try to publish more
@@ -304,14 +415,19 @@ void PX4RCOutput::_publish_actuators(void)
     if (actuators.nvalues > 8) {
         actuators.nvalues = 8;
     }
+    bool armed = hal.util->get_soft_armed();
 	actuators.timestamp = hrt_absolute_time();
     for (uint8_t i=0; i<actuators.nvalues; i++) {
-        actuators.values[i] = (_period[i] - _esc_pwm_min) / (float)(_esc_pwm_max - _esc_pwm_min);
+        if (!armed) {
+            actuators.values[i] = 0;
+        } else {
+            actuators.values[i] = (_period[i] - _esc_pwm_min) / (float)(_esc_pwm_max - _esc_pwm_min);
+        }
         // actuator values are from -1 to 1
         actuators.values[i] = actuators.values[i]*2 - 1;
     }
 
-    if (_actuator_direct_pub == -1) {
+    if (_actuator_direct_pub == NULL) {
         _actuator_direct_pub = orb_advertise(ORB_ID(actuator_direct), &actuators);
     } else {
         orb_publish(ORB_ID(actuator_direct), _actuator_direct_pub, &actuators);
@@ -321,9 +437,9 @@ void PX4RCOutput::_publish_actuators(void)
     }
 }
 
-void PX4RCOutput::_timer_tick(void)
+void PX4RCOutput::_send_outputs(void)
 {
-    uint32_t now = hal.scheduler->micros();
+    uint32_t now = AP_HAL::micros();
 
     if ((_enabled_channels & ((1U<<_servo_count)-1)) == 0) {
         // no channels enabled
@@ -337,20 +453,46 @@ void PX4RCOutput::_timer_tick(void)
         _need_update = true;
     }
 
+    // check for PWM count changing. This can happen then the user changes BRD_PWM_COUNT
+    if (now - _last_config_us > 1000000) {
+        if (_pwm_fd != -1) {
+            ioctl(_pwm_fd, PWM_SERVO_GET_COUNT, (unsigned long)&_servo_count);
+        }
+        if (_alt_fd != -1) {
+            ioctl(_alt_fd, PWM_SERVO_GET_COUNT, (unsigned long)&_alt_servo_count);
+        }
+        _last_config_us = now;
+    }
+    
     if (_need_update && _pwm_fd != -1) {
         _need_update = false;
         perf_begin(_perf_rcout);
-        if (_max_channel <= _servo_count) {
-            ::write(_pwm_fd, _period, _max_channel*sizeof(_period[0]));
-        } else {
-            // we're using both sets of outputs
-            ::write(_pwm_fd, _period, _servo_count*sizeof(_period[0]));
+        uint8_t to_send = _max_channel<_servo_count?_max_channel:_servo_count;
+        if (_sbus_enabled) {
+            to_send = _max_channel;
+        }
+        if (to_send > 0) {
+            for (int i=to_send-1; i >= 0; i--) {
+                if (_period[i] == 0 || _period[i] == PWM_IGNORE_THIS_CHANNEL) {
+                    to_send = i;
+                } else {
+                    break;
+                }
+            }
+        }
+        if (to_send > 0) {
+            ::write(_pwm_fd, _period, to_send*sizeof(_period[0]));
+        }
+        if (_max_channel > _servo_count) {
+            // maybe send updates to alt_fd
             if (_alt_fd != -1 && _alt_servo_count > 0) {
                 uint8_t n = _max_channel - _servo_count;
                 if (n > _alt_servo_count) {
                     n = _alt_servo_count;
                 }
-                ::write(_alt_fd, &_period[_servo_count], n*sizeof(_period[0]));
+                if (n > 0) {
+                    ::write(_alt_fd, &_period[_servo_count], n*sizeof(_period[0]));
+                }
             }
         }
 
@@ -362,11 +504,106 @@ void PX4RCOutput::_timer_tick(void)
     }
 
 update_pwm:
-	bool rc_updated = false;
-	if (_pwm_sub >= 0 && orb_check(_pwm_sub, &rc_updated) == 0 && rc_updated) {
-        orb_copy(ORB_ID_VEHICLE_CONTROLS, _pwm_sub, &_outputs);
-	}
+    for (uint8_t i=0; i<ORB_MULTI_MAX_INSTANCES; i++) {
+        bool rc_updated = false;
+        if (_outputs[i].pwm_sub >= 0 && 
+            orb_check(_outputs[i].pwm_sub, &rc_updated) == 0 && 
+            rc_updated) {
+            orb_copy(ORB_ID(actuator_outputs), _outputs[i].pwm_sub, &_outputs[i].outputs);
+        }
+    }
 
 }
+
+void PX4RCOutput::cork()
+{
+#if RCOUT_DEBUG_LATENCY
+    hal.gpio->pinMode(55, HAL_GPIO_OUTPUT);
+    hal.gpio->write(55, 1);
+#endif
+    _corking = true;
+}
+
+void PX4RCOutput::push()
+{
+#if RCOUT_DEBUG_LATENCY
+    hal.gpio->pinMode(55, HAL_GPIO_OUTPUT);
+    hal.gpio->write(55, 0);
+#endif
+    _corking = false;
+    if (_output_mode == MODE_PWM_ONESHOT) {
+        // run timer immediately in oneshot mode
+        _send_outputs();
+    }
+}
+
+void PX4RCOutput::_timer_tick(void)
+{
+    if (_output_mode != MODE_PWM_ONESHOT) {
+        /* in oneshot mode the timer does nothing as the outputs are
+         * sent from push() */
+        _send_outputs();
+    }
+
+    force_safety_pending_requests();
+}
+
+/*
+  enable sbus output
+ */
+bool PX4RCOutput::enable_sbus_out(uint16_t rate_hz)
+{
+    int fd = open("/dev/px4io", 0);
+    if (fd == -1) {
+        return false;
+    }
+    for (uint8_t tries=0; tries<10; tries++) {
+        if (ioctl(fd, SBUS_SET_PROTO_VERSION, 1) != 0) {
+            continue;
+        }
+        if (ioctl(fd, PWM_SERVO_SET_SBUS_RATE, rate_hz) != 0) {
+            continue;
+        }
+        close(fd);
+        _sbus_enabled = true;
+        return true;
+    }
+    close(fd);
+    return false;
+}
+
+/*
+  setup output mode
+ */
+void PX4RCOutput::set_output_mode(enum output_mode mode)
+{
+    if (_output_mode == mode) {
+        // no change
+        return;
+    }
+    if (mode == MODE_PWM_ONESHOT) {
+        // when using oneshot we don't want the regular pulses. The
+        // best we can do with the current PX4Firmware code is ask for
+        // 1Hz. This does still produce pulses, but the trigger calls
+        // mean the timer is constantly reset, so no pulses are
+        // produced except when triggered by push() when the main loop
+        // is running
+        set_freq(_rate_mask, 1);
+    }
+    _output_mode = mode;
+    if (_output_mode == MODE_PWM_ONESHOT) {
+        //::printf("enable oneshot\n");
+        ioctl(_pwm_fd, PWM_SERVO_SET_ONESHOT, 1);
+        if (_alt_fd != -1) {
+            ioctl(_alt_fd, PWM_SERVO_SET_ONESHOT, 1);
+        }
+    } else {
+        ioctl(_pwm_fd, PWM_SERVO_SET_ONESHOT, 0);
+        if (_alt_fd != -1) {
+            ioctl(_alt_fd, PWM_SERVO_SET_ONESHOT, 0);
+        }
+    }
+}
+
 
 #endif // CONFIG_HAL_BOARD

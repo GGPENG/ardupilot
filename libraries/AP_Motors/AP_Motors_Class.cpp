@@ -21,203 +21,187 @@
  */
 
 #include "AP_Motors_Class.h"
-#include <AP_HAL.h>
+#include <AP_HAL/AP_HAL.h>
 extern const AP_HAL::HAL& hal;
 
-
-// initialise motor map
-#if CONFIG_HAL_BOARD == HAL_BOARD_APM1
-    const uint8_t AP_Motors::_motor_to_channel_map[AP_MOTORS_MAX_NUM_MOTORS] PROGMEM = {APM1_MOTOR_TO_CHANNEL_MAP};
-#else
-    const uint8_t AP_Motors::_motor_to_channel_map[AP_MOTORS_MAX_NUM_MOTORS] PROGMEM = {APM2_MOTOR_TO_CHANNEL_MAP};
-#endif
-
-
-// parameters for the motor class
-const AP_Param::GroupInfo AP_Motors::var_info[] PROGMEM = {
-    // 0 was used by TB_RATIO
-
-    // @Param: TCRV_ENABLE
-    // @DisplayName: Thrust Curve Enable
-    // @Description: Controls whether a curve is used to linearize the thrust produced by the motors
-    // @User: Advanced
-    // @Values: 0:Disabled,1:Enable
-    AP_GROUPINFO("TCRV_ENABLE", 1, AP_Motors, _throttle_curve_enabled, THROTTLE_CURVE_ENABLED),
-
-    // @Param: TCRV_MIDPCT
-    // @DisplayName: Thrust Curve mid-point percentage
-    // @Description: Set the pwm position that produces half the maximum thrust of the motors
-    // @User: Advanced
-    // @Units: percent
-    // @Range: 20 80
-    // @Increment: 1
-    AP_GROUPINFO("TCRV_MIDPCT", 2, AP_Motors, _throttle_curve_mid, THROTTLE_CURVE_MID_THRUST),
-
-    // @Param: TCRV_MAXPCT
-    // @DisplayName: Thrust Curve max thrust percentage
-    // @Description: Set to the lowest pwm position that produces the maximum thrust of the motors.  Most motors produce maximum thrust below the maximum pwm value that they accept.
-    // @User: Advanced
-    // @Units: percent
-    // @Range: 50 100
-    // @Increment: 1
-    AP_GROUPINFO("TCRV_MAXPCT", 3, AP_Motors, _throttle_curve_max, THROTTLE_CURVE_MAX_THRUST),
-    
-    // @Param: SPIN_ARMED
-    // @DisplayName: Motors always spin when armed
-    // @Description: Controls whether motors always spin when armed (must be below THR_MIN)
-    // @Values: 0:Do Not Spin,70:VerySlow,100:Slow,130:Medium,150:Fast
-    // @User: Standard
-    AP_GROUPINFO("SPIN_ARMED", 5, AP_Motors, _spin_when_armed, AP_MOTORS_SPIN_WHEN_ARMED),
-
-    AP_GROUPEND
-};
-
 // Constructor
-AP_Motors::AP_Motors( RC_Channel& rc_roll, RC_Channel& rc_pitch, RC_Channel& rc_throttle, RC_Channel& rc_yaw, uint16_t speed_hz ) :
-    _rc_roll(rc_roll),
-    _rc_pitch(rc_pitch),
-    _rc_throttle(rc_throttle),
-    _rc_yaw(rc_yaw),
+AP_Motors::AP_Motors(uint16_t loop_rate, uint16_t speed_hz) :
+    _loop_rate(loop_rate),
     _speed_hz(speed_hz),
-    _min_throttle(AP_MOTORS_DEFAULT_MIN_THROTTLE),
-    _max_throttle(AP_MOTORS_DEFAULT_MAX_THROTTLE),
-    _hover_out(AP_MOTORS_DEFAULT_MID_THROTTLE),
-    _spin_when_armed_ramped(0)
+    _roll_in(0.0f),
+    _pitch_in(0.0f),
+    _yaw_in(0.0f),
+    _throttle_in(0.0f),
+    _throttle_avg_max(0.0f),
+    _throttle_filter(),
+    _spool_desired(DESIRED_SHUT_DOWN),
+    _batt_voltage(0.0f),
+    _batt_current(0.0f),
+    _air_density_ratio(1.0f),
+    _motor_map_mask(0),
+    _motor_fast_mask(0)
 {
-    AP_Param::setup_object_defaults(this, var_info);
+    // init other flags
+    _flags.armed = false;
+    _flags.frame_orientation = AP_MOTORS_X_FRAME;
+    _flags.interlock = false;
 
-    // slow start motors from zero to min throttle
-    _flags.slow_start_low_end = true;
-};
+    // setup throttle filtering
+    _throttle_filter.set_cutoff_frequency(0.0f);
+    _throttle_filter.reset(0.0f);
 
-// init
-void AP_Motors::Init()
-{
-    // set-up throttle curve - motors classes will decide whether to use it based on _throttle_curve_enabled parameter
-    setup_throttle_curve();
+    // init limit flags
+    limit.roll_pitch = true;
+    limit.yaw = true;
+    limit.throttle_lower = true;
+    limit.throttle_upper = true;
 };
 
 void AP_Motors::armed(bool arm)
 {
-    _flags.armed = arm;
-    if (!_flags.armed) {
-        _flags.slow_start_low_end = true;
+    if (_flags.armed != arm) {
+        _flags.armed = arm;
+        AP_Notify::flags.armed = arm;
+        if (!arm) {
+            save_params_on_disarm();
+        }
     }
-    AP_Notify::flags.armed = arm;
 };
 
-// set_min_throttle - sets the minimum throttle that will be sent to the engines when they're not off (i.e. to prevents issues with some motors spinning and some not at very low throttle)
-void AP_Motors::set_min_throttle(uint16_t min_throttle)
+// pilot input in the -1 ~ +1 range for roll, pitch and yaw. 0~1 range for throttle
+void AP_Motors::set_radio_passthrough(float roll_input, float pitch_input, float throttle_input, float yaw_input)
 {
-    _min_throttle = (float)min_throttle * (_rc_throttle.radio_max - _rc_throttle.radio_min) / 1000.0f;
+    _roll_radio_passthrough = roll_input;
+    _pitch_radio_passthrough = pitch_input;
+    _throttle_radio_passthrough = throttle_input;
+    _yaw_radio_passthrough = yaw_input;
 }
 
-// set_mid_throttle - sets the mid throttle which is close to the hover throttle of the copter
-// this is used to limit the amount that the stability patch will increase the throttle to give more room for roll, pitch and yaw control
-void AP_Motors::set_mid_throttle(uint16_t mid_throttle)
+/*
+  write to an output channel
+ */
+void AP_Motors::rc_write(uint8_t chan, uint16_t pwm)
 {
-    _hover_out = _rc_throttle.radio_min + (float)(_rc_throttle.radio_max - _rc_throttle.radio_min) * mid_throttle / 1000.0f;
+    if (_motor_map_mask & (1U<<chan)) {
+        // we have a mapped motor number for this channel
+        chan = _motor_map[chan];
+    }
+    if (_pwm_type == PWM_TYPE_ONESHOT125 && (_motor_fast_mask & (1U<<chan))) {
+        // OneShot125 uses a PWM range from 125 to 250 usec
+        pwm /= 8;
+        /*
+          OneShot125 ESCs can be confused by pulses below 125 or above
+          250, making them fail the pulse type auto-detection. This
+          happens at least with BLHeli
+        */
+        if (pwm < 125) {
+            pwm = 125;
+        } else if (pwm > 250) {
+            pwm = 250;
+        }
+    }
+    hal.rcout->write(chan, pwm);
 }
 
-// throttle_pass_through - passes provided pwm directly to all motors - dangerous but used for initialising ESCs
-//  pwm value is an actual pwm value that will be output, normally in the range of 1000 ~ 2000
-void AP_Motors::throttle_pass_through(int16_t pwm)
+/*
+  set frequency of a set of channels
+ */
+void AP_Motors::rc_set_freq(uint32_t mask, uint16_t freq_hz)
 {
-    if (armed()) {
-        // send the pilot's input directly to each enabled motor
-        for (int16_t i=0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
-            if (motor_enabled[i]) {
-                hal.rcout->write(pgm_read_byte(&_motor_to_channel_map[i]), pwm);
+    mask = rc_map_mask(mask);
+    if (freq_hz > 50) {
+        _motor_fast_mask |= mask;
+    }
+    hal.rcout->set_freq(mask, freq_hz);
+    if ((_pwm_type == PWM_TYPE_ONESHOT ||
+         _pwm_type == PWM_TYPE_ONESHOT125) &&
+        freq_hz > 50 &&
+        mask != 0) {
+        // tell HAL to do immediate output
+        hal.rcout->set_output_mode(AP_HAL::RCOutput::MODE_PWM_ONESHOT);
+    }
+}
+
+void AP_Motors::rc_enable_ch(uint8_t chan)
+{
+    if (_motor_map_mask & (1U<<chan)) {
+        // we have a mapped motor number for this channel
+        chan = _motor_map[chan];
+    }
+    hal.rcout->enable_ch(chan);
+}
+
+/*
+  map an internal motor mask to real motor mask
+ */
+uint32_t AP_Motors::rc_map_mask(uint32_t mask) const
+{
+    uint32_t mask2 = 0;
+    for (uint8_t i=0; i<32; i++) {
+        uint32_t bit = 1UL<<i;
+        if (mask & bit) {
+            if ((i < AP_MOTORS_MAX_NUM_MOTORS) && (_motor_map_mask & bit)) {
+                // we have a mapped motor number for this channel
+                mask2 |= (1UL << _motor_map[i]);
+            } else {
+                mask2 |= bit;
             }
         }
     }
+    return mask2;
 }
 
-// output - sends commands to the motors
-void AP_Motors::output()
+// convert input in -1 to +1 range to pwm output
+int16_t AP_Motors::calc_pwm_output_1to1(float input, const RC_Channel& servo)
 {
-    // update max throttle
-    update_max_throttle();
+    int16_t ret;
 
-    // output to motors
-    if (_flags.armed ) {
-        output_armed();
-    }else{
-        output_disarmed();
-    }
-};
+    input = constrain_float(input, -1.0f, 1.0f);
 
-// setup_throttle_curve - used to linearlise thrust output by motors
-// returns true if set up successfully
-bool AP_Motors::setup_throttle_curve()
-{
-    int16_t min_pwm = _rc_throttle.radio_min;
-    int16_t max_pwm = _rc_throttle.radio_max;
-	int16_t mid_throttle_pwm = (max_pwm + min_pwm) / 2;
-    int16_t mid_thrust_pwm = min_pwm + (float)(max_pwm - min_pwm) * ((float)_throttle_curve_mid/100.0f);
-    int16_t max_thrust_pwm = min_pwm + (float)(max_pwm - min_pwm) * ((float)_throttle_curve_max/100.0f);
-    bool retval = true;
-
-    // some basic checks that the curve is valid
-    if( mid_thrust_pwm >= (min_pwm+_min_throttle) && mid_thrust_pwm <= max_pwm && max_thrust_pwm >= mid_thrust_pwm && max_thrust_pwm <= max_pwm ) {
-        // clear curve
-        _throttle_curve.clear();
-
-        // curve initialisation
-        retval &= _throttle_curve.add_point(min_pwm, min_pwm);
-        retval &= _throttle_curve.add_point(min_pwm+_min_throttle, min_pwm+_min_throttle);
-        retval &= _throttle_curve.add_point(mid_throttle_pwm, mid_thrust_pwm);
-        retval &= _throttle_curve.add_point(max_pwm, max_thrust_pwm);
-
-        // return success
-        return retval;
-    }else{
-        retval = false;
+    if (servo.get_reverse()) {
+        input = -input;
     }
 
-    // disable throttle curve if not set-up corrrectly
-    if( !retval ) {
-        _throttle_curve_enabled = false;
-        hal.console->println_P(PSTR("AP_Motors: failed to create throttle curve"));
+    if (input >= 0.0f) {
+        ret = ((input * (servo.get_radio_max() - servo.get_radio_trim())) + servo.get_radio_trim());
+    } else {
+        ret = ((input * (servo.get_radio_trim() - servo.get_radio_min())) + servo.get_radio_trim());
     }
 
-    return retval;
+    return constrain_int16(ret, servo.get_radio_min(), servo.get_radio_max());
 }
 
-// slow_start - set to true to slew motors from current speed to maximum
-// Note: this must be set immediately before a step up in throttle
-void AP_Motors::slow_start(bool true_false)
+// convert input in 0 to +1 range to pwm output
+int16_t AP_Motors::calc_pwm_output_0to1(float input, const RC_Channel& servo)
 {
-    // set slow_start flag
-    _flags.slow_start = true;
+    int16_t ret;
 
-    // initialise maximum throttle to current throttle
-    _max_throttle = constrain_int16(_rc_throttle.servo_out, 0, AP_MOTORS_DEFAULT_MAX_THROTTLE);
+    input = constrain_float(input, 0.0f, 1.0f);
+
+    if (servo.get_reverse()) {
+        input = 1.0f-input;
+    }
+
+    ret = input * (servo.get_radio_max() - servo.get_radio_min()) + servo.get_radio_min();
+
+    return constrain_int16(ret, servo.get_radio_min(), servo.get_radio_max());
 }
 
-// update_max_throttle - updates the limits on _max_throttle if necessary taking into account slow_start_throttle flag
-void AP_Motors::update_max_throttle()
+/*
+  add a motor, setting up _motor_map and _motor_map_mask as needed
+ */
+void AP_Motors::add_motor_num(int8_t motor_num)
 {
-    // ramp up minimum spin speed if necessary
-    if (_flags.slow_start_low_end) {
-        _spin_when_armed_ramped += AP_MOTOR_SLOW_START_LOW_END_INCREMENT;
-        if (_spin_when_armed_ramped >= _spin_when_armed) {
-            _spin_when_armed_ramped = _spin_when_armed;
-            _flags.slow_start_low_end = false;
+    // ensure valid motor number is provided
+    if( motor_num >= 0 && motor_num < AP_MOTORS_MAX_NUM_MOTORS ) {
+        uint8_t chan;
+        if (RC_Channel_aux::find_channel((RC_Channel_aux::Aux_servo_function_t)(RC_Channel_aux::k_motor1+motor_num),
+                                         chan)) {
+            _motor_map[motor_num] = chan;
+            _motor_map_mask |= 1U<<motor_num;
+        } else {
+            // disable this channel from being used by RC_Channel_aux
+            RC_Channel_aux::disable_aux_channel(motor_num);
         }
-    }
-
-    // return max throttle if we're not slow_starting
-    if (!_flags.slow_start) {
-        return;
-    }
-
-    // increase slow start throttle
-    _max_throttle += AP_MOTOR_SLOW_START_INCREMENT;
-
-    // turn off slow start if we've reached max throttle
-    if (_max_throttle >= _rc_throttle.servo_out) {
-        _max_throttle = AP_MOTORS_DEFAULT_MAX_THROTTLE;
-        _flags.slow_start = false;
     }
 }

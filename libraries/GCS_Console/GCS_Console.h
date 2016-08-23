@@ -1,8 +1,6 @@
+#pragma once
 
-#ifndef __GCS_CONSOLE_H__
-#define __GCS_CONSOLE_H__
-
-#include <GCS_MAVLink.h>
+#include <GCS_MAVLink/GCS_MAVLink.h>
 
 /* Ensure compatibility with GCS_MAVLink library. We need the DATA16
  * and DATA32 mesages. If these aren't present, get them from the mavlink
@@ -21,5 +19,3 @@ void gcs_console_handle_data16(mavlink_message_t* msg);
 void gcs_console_handle_data32(mavlink_message_t* msg);
 
 void gcs_console_send(mavlink_channel_t chan);
-
-#endif // __GCS_CONSOLE_H__

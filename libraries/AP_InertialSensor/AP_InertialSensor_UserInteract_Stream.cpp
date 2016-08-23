@@ -1,5 +1,5 @@
 #include <stdarg.h>
-#include <AP_HAL.h>
+#include <AP_HAL/AP_HAL.h>
 #include "AP_InertialSensor_UserInteract_Stream.h"
 
 extern const AP_HAL::HAL& hal;
@@ -17,11 +17,11 @@ bool AP_InertialSensor_UserInteractStream::blocking_read()
     return true;
 }
 
-void AP_InertialSensor_UserInteractStream::_printf_P(
-        const prog_char* fmt, ...) {
+void AP_InertialSensor_UserInteractStream::printf(
+        const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    _s->vprintf_P(fmt, ap);
+    _s->vprintf(fmt, ap);
     va_end(ap);
 }
 

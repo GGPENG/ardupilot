@@ -14,13 +14,12 @@
  * - provides access to the rally points, including logic to find the nearest one
  *
  */
-#ifndef AP_Rally_h
-#define AP_Rally_h
+#pragma once
 
-#include <AP_Common.h>
-#include <AP_Param.h>
-#include <AP_AHRS.h>
-#include <../StorageManager/StorageManager.h>
+#include <AP_Common/AP_Common.h>
+#include <AP_Param/AP_Param.h>
+#include <AP_AHRS/AP_AHRS.h>
+#include <StorageManager/StorageManager.h>
 
 #define AP_RALLY_WP_SIZE        15  // eeprom size of rally points
 
@@ -63,6 +62,8 @@ public:
     static const struct AP_Param::GroupInfo var_info[];
 
 private:
+    virtual bool is_valid(const Location &rally_point) const { return true; }
+
     static StorageAccess _storage;
 
     // internal variables
@@ -71,9 +72,7 @@ private:
     // parameters
     AP_Int8  _rally_point_total_count;
     AP_Float _rally_limit_km;
+    AP_Int8  _rally_incl_home;
 
     uint32_t _last_change_time_ms;
 };
-
-
-#endif // AP_Rally_h

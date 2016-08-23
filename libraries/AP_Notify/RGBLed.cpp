@@ -16,19 +16,27 @@
 */
 
 
-#include <AP_HAL.h>
-#include <AP_GPS.h>
+#include <AP_HAL/AP_HAL.h>
+#include <AP_GPS/AP_GPS.h>
 #include "RGBLed.h"
 #include "AP_Notify.h"
 
 extern const AP_HAL::HAL& hal;
 
 RGBLed::RGBLed(uint8_t led_off, uint8_t led_bright, uint8_t led_medium, uint8_t led_dim):
+    counter(0),
+    step(0),
+    _healthy(false),
+    _red_des(0),
+    _green_des(0),
+    _blue_des(0),
+    _red_curr(0),
+    _green_curr(0),
+    _blue_curr(0),
     _led_off(led_off),
     _led_bright(led_bright),
     _led_medium(led_medium),
     _led_dim(led_dim)
-
 {
 
 }    
@@ -40,13 +48,8 @@ bool RGBLed::init()
 }
 
 // set_rgb - set color as a combination of red, green and blue values
-void RGBLed::set_rgb(uint8_t red, uint8_t green, uint8_t blue)
+void RGBLed::_set_rgb(uint8_t red, uint8_t green, uint8_t blue)
 {
-    // return immediately if not enabled
-    if (!_healthy) {
-        return;
-    }
-
     if (red != _red_curr ||
         green != _green_curr ||
         blue != _blue_curr) {
@@ -59,11 +62,41 @@ void RGBLed::set_rgb(uint8_t red, uint8_t green, uint8_t blue)
     }
 }
 
+// set_rgb - set color as a combination of red, green and blue values
+void RGBLed::set_rgb(uint8_t red, uint8_t green, uint8_t blue)
+{
+    // return immediately if not enabled
+    if (!_healthy) {
+        return;
+    }
+    if (pNotify->_rgb_led_override) {
+        // don't set if in override mode
+        return;
+    }
+    _set_rgb(red, green, blue);
+}
+
 
 // _scheduled_update - updates _red, _green, _blue according to notify flags
 void RGBLed::update_colours(void)
 {
     uint8_t brightness = _led_bright;
+
+    switch (pNotify->_rgb_led_brightness) {
+    case RGB_LED_OFF:
+        brightness = _led_off;
+        break;
+    case RGB_LED_LOW:
+        brightness = _led_dim;
+        break;
+    case RGB_LED_MEDIUM:
+        brightness = _led_medium;
+        break;
+    case RGB_LED_HIGH:
+        brightness = _led_bright;
+        break;
+    }
+
     // slow rate from 50Hz to 10hz
     counter++;
     if (counter < 5) {
@@ -80,7 +113,7 @@ void RGBLed::update_colours(void)
     }
 
     // use dim light when connected through USB
-    if (hal.gpio->usb_connected()) {
+    if (hal.gpio->usb_connected() && brightness > _led_dim) {
         brightness = _led_dim;
     }
 
@@ -145,11 +178,8 @@ void RGBLed::update_colours(void)
 
     // radio and battery failsafe patter: flash yellow
     // gps failsafe pattern : flashing yellow and blue
-    // baro glitching pattern : flashing yellow and purple
     // ekf_bad pattern : flashing yellow and red
     if (AP_Notify::flags.failsafe_radio || AP_Notify::flags.failsafe_battery ||
-            AP_Notify::flags.failsafe_gps || AP_Notify::flags.gps_glitching ||
-            AP_Notify::flags.baro_glitching ||
             AP_Notify::flags.ekf_bad) {
         switch(step) {
             case 0:
@@ -167,17 +197,7 @@ void RGBLed::update_colours(void)
             case 7:
             case 8:
             case 9:
-                if (AP_Notify::flags.failsafe_gps || AP_Notify::flags.gps_glitching) {
-                    // blue on for gps failsafe or glitching
-                    _red_des = _led_off;
-                    _blue_des = brightness;
-                    _green_des = _led_off;
-                } else if (AP_Notify::flags.baro_glitching) {
-                    // purple on if baro glitching
-                    _red_des = brightness;
-                    _blue_des = brightness;
-                    _green_des = _led_off;
-                } else if (AP_Notify::flags.ekf_bad) {
+                if (AP_Notify::flags.ekf_bad) {
                     // red on if ekf bad
                     _red_des = brightness;
                     _blue_des = _led_off;
@@ -312,6 +332,66 @@ void RGBLed::update()
     if (!_healthy) {
         return;
     }
-    update_colours();
-    set_rgb(_red_des, _green_des, _blue_des);
+    if (!pNotify->_rgb_led_override) {
+        update_colours();
+        set_rgb(_red_des, _green_des, _blue_des);
+    } else {
+        update_override();
+    }
+}
+
+/*
+  handle LED control, only used when LED_OVERRIDE=1
+*/
+void RGBLed::handle_led_control(mavlink_message_t *msg)
+{
+    if (!pNotify->_rgb_led_override) {
+        // ignore LED_CONTROL commands if not in LED_OVERRIDE mode
+        return;
+    }
+
+    // decode mavlink message
+    mavlink_led_control_t packet;
+    mavlink_msg_led_control_decode(msg, &packet);
+
+    _led_override.start_ms = AP_HAL::millis();
+    
+    switch (packet.custom_len) {
+    case 3:
+        _led_override.rate_hz = 0;
+        _led_override.r = packet.custom_bytes[0];
+        _led_override.g = packet.custom_bytes[1];
+        _led_override.b = packet.custom_bytes[2];
+        break;
+    case 4:
+        _led_override.rate_hz = packet.custom_bytes[3];
+        _led_override.r = packet.custom_bytes[0];
+        _led_override.g = packet.custom_bytes[1];
+        _led_override.b = packet.custom_bytes[2];
+        break;
+    default:
+        // not understood
+        break;
+    }
+}
+
+/*
+  update LED when in override mode
+ */
+void RGBLed::update_override(void)
+{
+    if (_led_override.rate_hz == 0) {
+        // solid colour
+        _set_rgb(_led_override.r, _led_override.g, _led_override.b);
+        return;
+    }
+    // blinking
+    uint32_t ms_per_cycle = 1000 / _led_override.rate_hz;
+    uint32_t cycle = (AP_HAL::millis() - _led_override.start_ms) % ms_per_cycle;
+    if (cycle > ms_per_cycle / 2) {
+        // on
+        _set_rgb(_led_override.r, _led_override.g, _led_override.b);
+    } else {
+        _set_rgb(0, 0, 0);
+    }
 }

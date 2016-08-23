@@ -1,129 +1,87 @@
 /// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
+#pragma once
 
-#ifndef __AP_BARO_MS5611_H__
-#define __AP_BARO_MS5611_H__
+#include "AP_Baro_Backend.h"
 
-#include <AP_HAL.h>
-#include "AP_Baro.h"
+#include <AP_HAL/AP_HAL.h>
+#include <AP_HAL/Semaphores.h>
+#include <AP_HAL/Device.h>
 
-#if CONFIG_HAL_BOARD != HAL_BOARD_APM2 && CONFIG_HAL_BOARD != HAL_BOARD_APM1
-#define MS5611_WITH_I2C 1
-#else
-#define MS5611_WITH_I2C 0
-#endif
-
-
-/** Abstract serial device driver for MS5611. */
-class AP_Baro_MS5611_Serial
+class AP_Baro_MS56XX : public AP_Baro_Backend
 {
 public:
-    /** Initialize the driver. */
-    virtual void init() = 0;
+    void update();
 
-    /** Read a 16-bit value from register "reg". */
-    virtual uint16_t read_16bits(uint8_t reg) = 0;
+protected:
+    /*
+     * Update @accum and @count with the new sample in @val, taking into
+     * account a maximum number of samples given by @max_count; in case
+     * maximum number is reached, @accum and @count are updated appropriately
+     */
+    static void _update_and_wrap_accumulator(uint32_t *accum, uint32_t val,
+                                             uint8_t *count, uint8_t max_count);
 
-    /** Read a 24-bit value from the ADC. */
-    virtual uint32_t read_adc() = 0;
+    AP_Baro_MS56XX(AP_Baro &baro, AP_HAL::OwnPtr<AP_HAL::Device> dev);
+    void _init();
 
-    /** Write a single byte command. */
-    virtual void write(uint8_t reg) = 0;
+    virtual void _calculate() = 0;
+    virtual bool _read_prom(uint16_t prom[8]);
 
-    /** Acquire the internal semaphore for this device.
-     * take_nonblocking should be used from the timer process,
-     * take_blocking from synchronous code (i.e. init) */
-    virtual bool sem_take_nonblocking() { return true; }
-    virtual bool sem_take_blocking() { return true; }
+    uint16_t _read_prom_word(uint8_t word);
+    uint32_t _read_adc();
 
-    /** Release the internal semaphore for this device. */
-    virtual void sem_give() {}
-};
+    bool _timer();
 
-/** SPI serial device. */
-class AP_Baro_MS5611_SPI : public AP_Baro_MS5611_Serial
-{
-public:
-    virtual void init();
-    virtual uint16_t read_16bits(uint8_t reg);
-    virtual uint32_t read_adc();
-    virtual void write(uint8_t reg);
-    virtual bool sem_take_nonblocking();
-    virtual bool sem_take_blocking();
-    virtual void sem_give();
+    AP_HAL::OwnPtr<AP_HAL::Device> _dev;
 
-private:
-    AP_HAL::SPIDeviceDriver *_spi;
-    AP_HAL::Semaphore *_spi_sem;
-};
+    /*
+     * Synchronize access to _accum between thread sampling the HW and main
+     * thread using the values
+     */
+    AP_HAL::Semaphore *_sem;
 
-#if MS5611_WITH_I2C
-/** I2C serial device. */
-class AP_Baro_MS5611_I2C : public AP_Baro_MS5611_Serial
-{
-public:
-    virtual void init();
-    virtual uint16_t read_16bits(uint8_t reg);
-    virtual uint32_t read_adc();
-    virtual void write(uint8_t reg);
-    virtual bool sem_take_nonblocking();
-    virtual bool sem_take_blocking();
-    virtual void sem_give();
+    /* Shared values between thread sampling the HW and main thread */
+    struct {
+        uint32_t s_D1;
+        uint32_t s_D2;
+        uint8_t d1_count;
+        uint8_t d2_count;
+    } _accum;
 
-private:
-    AP_HAL::Semaphore *_i2c_sem;
-};
-#endif // MS5611_WITH_I2C
+    uint8_t _state;
+    uint8_t _instance;
+    uint32_t _last_cmd_usec;
 
-class AP_Baro_MS5611 : public AP_Baro
-{
-public:
-    AP_Baro_MS5611(AP_Baro_MS5611_Serial *serial)
-    {
-        _serial = serial;
-    }
+    /* Last compensated values from accumulated sample */
+    float _D1, _D2;
 
-    /* AP_Baro public interface: */
-    bool            init();
-    uint8_t         read();
-    float           get_pressure(); // in mbar*100 units
-    float           get_temperature() const; // in celsius degrees
-
-
-    /* Serial port drivers to pass to "init". */
-    static AP_Baro_MS5611_SPI spi;
-#if MS5611_WITH_I2C
-    static AP_Baro_MS5611_I2C i2c;
-#endif
-
-private:
-    void            _calculate();
-    /* Asynchronous handler functions: */
-    void                            _update();
-
-#if CONFIG_HAL_BOARD != HAL_BOARD_APM2
-    bool check_crc(void);
-#endif
-
-    /* Asynchronous state: */
-    static volatile bool            _updated;
-    static volatile uint8_t         _d1_count;
-    static volatile uint8_t         _d2_count;
-    static volatile uint32_t        _s_D1, _s_D2;
-    static uint8_t                  _state;
-    static uint32_t                 _timer;
-    static AP_Baro_MS5611_Serial   *_serial;
-    /* Gates access to asynchronous state: */
-    static bool                     _sync_access;
-
-    float                           Temp;
-    float                           Press;
-
-    int32_t                         _raw_press;
-    int32_t                         _raw_temp;
     // Internal calibration registers
-    uint16_t                        C1,C2,C3,C4,C5,C6;
-    float                           D1,D2;
-
+    struct {
+        uint16_t c1, c2, c3, c4, c5, c6;
+    } _cal_reg;
 };
 
-#endif //  __AP_BARO_MS5611_H__
+class AP_Baro_MS5611 : public AP_Baro_MS56XX
+{
+public:
+    AP_Baro_MS5611(AP_Baro &baro, AP_HAL::OwnPtr<AP_HAL::Device> dev);
+protected:
+    void _calculate() override;
+};
+
+class AP_Baro_MS5607 : public AP_Baro_MS56XX
+{
+public:
+    AP_Baro_MS5607(AP_Baro &baro, AP_HAL::OwnPtr<AP_HAL::Device> dev);
+protected:
+    void _calculate() override;
+};
+
+class AP_Baro_MS5637 : public AP_Baro_MS56XX
+{
+public:
+    AP_Baro_MS5637(AP_Baro &baro, AP_HAL::OwnPtr<AP_HAL::Device> dev);
+protected:
+    void _calculate() override;
+    bool _read_prom(uint16_t prom[8]) override;
+};

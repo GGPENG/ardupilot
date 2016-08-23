@@ -1,85 +1,137 @@
 /// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
-
-#ifndef __AP_INERTIAL_SENSOR_MPU9250_H__
-#define __AP_INERTIAL_SENSOR_MPU9250_H__
+#pragma once
 
 #include <stdint.h>
-#include <AP_HAL.h>
-#include <AP_Math.h>
-#include <AP_Progmem.h>
-#include <Filter.h>
-#include <LowPassFilter2p.h>
+
+#include <AP_HAL/AP_HAL.h>
+#include <AP_HAL/I2CDevice.h>
+#include <AP_HAL/SPIDevice.h>
+#include <AP_Math/AP_Math.h>
+#include <Filter/Filter.h>
+#include <Filter/LowPassFilter2p.h>
+
+#include "AP_InertialSensor_Backend.h"
 #include "AP_InertialSensor.h"
+#include "AuxiliaryBus.h"
+
+class AP_MPU9250_AuxiliaryBus;
+class AP_MPU9250_AuxiliaryBusSlave;
 
 // enable debug to see a register dump on startup
 #define MPU9250_DEBUG 0
 
 class AP_InertialSensor_MPU9250 : public AP_InertialSensor_Backend
 {
-public:
+    friend AP_MPU9250_AuxiliaryBus;
+    friend AP_MPU9250_AuxiliaryBusSlave;
 
-    AP_InertialSensor_MPU9250(AP_InertialSensor &imu);
+public:
+    virtual ~AP_InertialSensor_MPU9250();
+
+    static AP_InertialSensor_MPU9250 &from(AP_InertialSensor_Backend &backend) {
+        return static_cast<AP_InertialSensor_MPU9250&>(backend);
+    }
+
+    static AP_InertialSensor_Backend *probe(AP_InertialSensor &imu,
+                                            AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev);
+
+    static AP_InertialSensor_Backend *probe(AP_InertialSensor &imu,
+                                            AP_HAL::OwnPtr<AP_HAL::SPIDevice> dev);
 
     /* update accel and gyro state */
     bool update();
 
-    bool gyro_sample_available(void) { return _have_sample_available; }
-    bool accel_sample_available(void) { return _have_sample_available; }
+    /*
+     * Return an AuxiliaryBus if the bus driver allows it
+     */
+    AuxiliaryBus *get_auxiliary_bus() override;
 
-    // detect the sensor
-    static AP_InertialSensor_Backend *detect(AP_InertialSensor &imu);
+    void start() override;
 
 private:
-    bool                 _init_sensor(void);
+    AP_InertialSensor_MPU9250(AP_InertialSensor &imu,
+                              AP_HAL::OwnPtr<AP_HAL::Device> dev);
 
-    void                 _read_data_transaction();
-    bool                 _data_ready();
-    void                 _poll_data(void);
-    uint8_t              _register_read( uint8_t reg );
-    void                 _register_write( uint8_t reg, uint8_t val );
-    bool                 _hardware_init(void);
-    bool                 _sample_available();
+#if MPU9250_DEBUG
+    static void _dump_registers();
+#endif
 
-    AP_HAL::SPIDeviceDriver *_spi;
-    AP_HAL::Semaphore *_spi_sem;
+    bool _init();
+    bool _hardware_init();
 
-    // support for updating filter at runtime
-    int16_t _last_filter_hz;
+    void _set_filter_register(uint16_t filter_hz);
+    bool _has_auxiliary_bus();
 
-    // change the filter frequency
-    void _set_filter(uint8_t filter_hz);
+    /* Read a single sample */
+    void _read_sample();
 
-    // This structure is used to pass data from the timer which reads
-    // the sensor to the main thread. The _shared_data_idx is used to
-    // prevent race conditions by ensuring the data is fully updated
-    // before being used by the consumer
-    struct {
-        Vector3f _accel_filtered;
-        Vector3f _gyro_filtered;
-    } _shared_data[2];
-    volatile uint8_t _shared_data_idx;
+    /* Check if there's data available by reading register */
+    bool _data_ready();
+    bool _data_ready(uint8_t int_status);
 
-    // Low Pass filters for gyro and accel 
-    LowPassFilter2p _accel_filter_x;
-    LowPassFilter2p _accel_filter_y;
-    LowPassFilter2p _accel_filter_z;
-    LowPassFilter2p _gyro_filter_x;
-    LowPassFilter2p _gyro_filter_y;
-    LowPassFilter2p _gyro_filter_z;
+    /* Poll for new data (non-blocking) */
+    void _poll_data();
 
-    // do we currently have a sample pending?
-    bool _have_sample_available;
+    /* Read and write functions taking the differences between buses into
+     * account */
+    bool _block_read(uint8_t reg, uint8_t *buf, uint32_t size);
+    uint8_t _register_read(uint8_t reg);
+    void _register_write(uint8_t reg, uint8_t val);
 
-    // default filter frequency when set to zero
-    uint8_t _default_filter_hz;
+    void _accumulate(uint8_t *sample);
 
-    // gyro and accel instances
+    // instance numbers of accel and gyro data
     uint8_t _gyro_instance;
     uint8_t _accel_instance;
 
-#if MPU9250_DEBUG
-    void						_dump_registers(void);
-#endif
+    // The default rotation for the IMU, its value depends on how the IMU is
+    // placed by default on the system
+    enum Rotation _default_rotation;
+
+    AP_HAL::OwnPtr<AP_HAL::Device> _dev;
+    AP_MPU9250_AuxiliaryBus *_auxiliary_bus;
 };
 
-#endif // __AP_INERTIAL_SENSOR_MPU9250_H__
+class AP_MPU9250_AuxiliaryBusSlave : public AuxiliaryBusSlave
+{
+    friend class AP_MPU9250_AuxiliaryBus;
+
+public:
+    int passthrough_read(uint8_t reg, uint8_t *buf, uint8_t size) override;
+    int passthrough_write(uint8_t reg, uint8_t val) override;
+
+    int read(uint8_t *buf) override;
+
+protected:
+    AP_MPU9250_AuxiliaryBusSlave(AuxiliaryBus &bus, uint8_t addr, uint8_t instance);
+    int _set_passthrough(uint8_t reg, uint8_t size, uint8_t *out = nullptr);
+
+private:
+    const uint8_t _mpu9250_addr;
+    const uint8_t _mpu9250_reg;
+    const uint8_t _mpu9250_ctrl;
+    const uint8_t _mpu9250_do;
+
+    uint8_t _ext_sens_data = 0;
+};
+
+class AP_MPU9250_AuxiliaryBus : public AuxiliaryBus
+{
+    friend class AP_InertialSensor_MPU9250;
+
+public:
+    AP_HAL::Semaphore *get_semaphore() override;
+
+protected:
+    AP_MPU9250_AuxiliaryBus(AP_InertialSensor_MPU9250 &backend);
+
+    AuxiliaryBusSlave *_instantiate_slave(uint8_t addr, uint8_t instance);
+    int _configure_periodic_read(AuxiliaryBusSlave *slave, uint8_t reg,
+                                 uint8_t size);
+
+private:
+    void _configure_slaves();
+
+    static const uint8_t MAX_EXT_SENS_DATA = 24;
+    uint8_t _ext_sens_data = 0;
+};

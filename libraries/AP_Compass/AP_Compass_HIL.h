@@ -1,24 +1,20 @@
 /// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
-#ifndef AP_Compass_HIL_H
-#define AP_Compass_HIL_H
+#pragma once
 
-#include "Compass.h"
+#include "AP_Compass.h"
 
-class AP_Compass_HIL : public Compass
+#define HIL_NUM_COMPASSES 2
+
+class AP_Compass_HIL : public AP_Compass_Backend
 {
 public:
-    AP_Compass_HIL();
-    bool        read(void);
-    void        accumulate(void);
-    void        setHIL(float roll, float pitch, float yaw);
-    void        setHIL(const Vector3f &mag);
-    const Vector3f&   getHIL() const;
+    AP_Compass_HIL(Compass &compass);
+    void read(void);
+    bool init(void);
+
+    // detect the sensor
+    static AP_Compass_Backend *detect(Compass &compass);
 
 private:
-    Vector3f    _hil_mag;
-    Vector3f    _Bearth;
-    float		_last_declination;
-    void        _setup_earth_field();
+    uint8_t     _compass_instance[HIL_NUM_COMPASSES];
 };
-
-#endif
